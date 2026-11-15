@@ -74,6 +74,14 @@ body.lock{overflow:hidden}
 .c .spk{max-width:140px}
 .why{font-size:14px;color:var(--mute);margin:6px 0 10px}
 .note{font-size:13px;color:var(--mute);margin-top:8px}
+.kf{display:flex;gap:8px;margin-top:8px}
+.kf input{flex:1;font-family:ui-monospace,monospace;font-size:14px}
+.bk{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.bk button{background:transparent;color:var(--blue);border:1px solid var(--line)}
+.sold{display:grid;gap:8px}
+.sold a{display:flex;justify-content:space-between;gap:10px;text-decoration:none;color:var(--ink);border-top:1px solid var(--line);padding-top:8px;font-size:14px}
+.sold a:first-child{border-top:0;padding-top:0}
+.sold b{color:var(--green)}
 .sec + #list{margin-top:12px}
 </style>
 </head>
@@ -109,6 +117,18 @@ body.lock{overflow:hidden}
       </label>
       <label class="chk"><input type="checkbox" id="priced" checked> Masquer les cartes sans prix</label>
     </div>
+    <div class="note" style="margin-top:14px"><b>Clé PokeTrace</b> (pour les ventes eBay détaillées). Elle reste enregistrée uniquement sur cet iPhone.</div>
+    <div class="kf"><input id="pkkey" type="password" placeholder="Colle la clé ici" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="pksave" type="button" class="alt">Enregistrer</button></div>
+    <div class="note" id="pkstate"></div>
+    <div class="note" style="margin-top:14px"><b>Sauvegarde de mes données</b> (Mes cartes, À surveiller). À faire de temps en temps, et avant de supprimer l’icône de l’appli.</div>
+    <div class="bk">
+      <button id="bkexp" type="button">Exporter (fichier)</button>
+      <button id="bkcopy" type="button">Copier les données</button>
+      <button id="bkimp" type="button">Importer (fichier)</button>
+      <button id="bkpaste" type="button">Coller les données</button>
+    </div>
+    <input type="file" id="bkfile" accept=".json,application/json" hidden>
+    <div class="note" id="bkstate"></div>
   </details>
   <div id="out"><div class="msg">Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée.</div></div>
 </main>
@@ -188,10 +208,17 @@ function chart(pts, w, h){
 }
 const cmPts = c => [{x:-15, y:c.avg30}, {x:-3.5, y:c.avg7}, {x:-0.5, y:c.avg1}, {x:0, y:c.trend}].filter(q => q.y > 0);
 
+// Deuxième copie des données dans IndexedDB (sécurité si localStorage est vidé)
+const idb = new Promise(res => { try { const r = indexedDB.open("cote", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch(e){ res(null); } });
+async function idbSet(k, v){ const db = await idb; if (!db) return; try { db.transaction("kv", "readwrite").objectStore("kv").put(v, k); } catch(e){} }
+async function idbGet(k){
+  const db = await idb; if (!db) return null;
+  return new Promise(res => { try { const r = db.transaction("kv").objectStore("kv").get(k); r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null); } catch(e){ res(null); } });
+}
 function load(){ try { return JSON.parse(localStorage.getItem("suivi") || "[]"); } catch(e){ return []; } }
-function save(l){ try { localStorage.setItem("suivi", JSON.stringify(l)); } catch(e){} }
+function save(l){ const j = JSON.stringify(l); try { localStorage.setItem("suivi", j); } catch(e){} idbSet("suivi", j); }
 function loadM(){ try { return JSON.parse(localStorage.getItem("mine") || "[]"); } catch(e){ return []; } }
-function saveM(l){ try { localStorage.setItem("mine", JSON.stringify(l)); } catch(e){} }
+function saveM(l){ const j = JSON.stringify(l); try { localStorage.setItem("mine", j); } catch(e){} idbSet("mine", j); }
 
 // Mémoire des prix : valable pour la journée (Cardmarket met à jour une fois par jour)
 const today = new Date().toISOString().slice(0, 10);
@@ -448,7 +475,7 @@ function renderMine(list){
       kv("Investi (cartes avec prix d’achat)", inv > 0 ? eur(inv) : null),
       kv("Gain ou perte", g != null ? sgn(g) + " (" + sgnp(invVal / inv - 1) + ")" : null),
       kv("À vendre bientôt ?", signals ? signals + " carte" + (signals > 1 ? "s" : "") : null)])}
-      <div class="note">Valeur au prix tendance Cardmarket, avant frais de vente. Les indications « vendre » ou « garder » reposent sur les moyennes 7 et 30 jours : ce sont des repères simples, pas des conseils financiers.</div></div>
+      <div class="note">Valeur au prix tendance Cardmarket, avant frais de vente. Les indications « vendre » ou « garder » reposent sur les moyennes 7 et 30 jours : ce sont des repères simples, pas des conseils financiers.</div>${bkOld() ? '<div class="note">Pense à sauvegarder tes données : ouvre « Filtres et tri », puis « Exporter ».</div>' : ""}</div>
     <div id="list">${rows.map(rowMine).join("")}</div>`;
 }
 
@@ -492,6 +519,68 @@ out.addEventListener("click", e => {
   const card = e.target.closest(".c");
   if (card && !e.target.closest("a")) openCard(card.dataset.id);
 });
+
+// ===== Clé PokeTrace (stockée sur l’iPhone seulement) =====
+const PK = "https://api.poketrace.com/v2";
+const pkKey = () => { try { return localStorage.getItem("pkkey") || ""; } catch(e){ return ""; } };
+function pkShowState(){
+  $("pkstate").textContent = pkKey() ? "Clé enregistrée sur cet iPhone." : "Aucune clé enregistrée.";
+  $("pkkey").value = "";
+  $("pkkey").placeholder = pkKey() ? "•••••••• (enregistrée, colle une autre pour la remplacer)" : "Colle la clé ici";
+}
+$("pksave").addEventListener("click", () => {
+  const k = $("pkkey").value.trim();
+  if (!k){ try { localStorage.removeItem("pkkey"); } catch(e){} idbSet("pkkey", ""); }
+  else { try { localStorage.setItem("pkkey", k); } catch(e){} idbSet("pkkey", k); }
+  pkShowState();
+});
+pkShowState();
+
+async function pkGet(path){
+  const key = pkKey();
+  if (!key) throw new Error("nokey");
+  const r = await Promise.race([
+    fetch(PK + path, {headers:{"X-API-Key": key}}),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("trop lent")), 20000))
+  ]);
+  if (r.status === 401 || r.status === 403) throw new Error("auth");
+  if (r.status === 402 || r.status === 429) throw new Error("quota");
+  if (!r.ok) throw new Error("erreur " + r.status);
+  return r.json();
+}
+
+// Ventes récentes eBay (demande l’id PokeTrace de la carte via la recherche)
+async function loadSold(b){
+  const box = document.getElementById("soldbox");
+  if (!box) return;
+  if (!pkKey()){ box.innerHTML = '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay détaillées.</div>'; return; }
+  try {
+    const q = encodeURIComponent(b.name);
+    const found = await pkGet(`/cards?search=${q}&card_number=${encodeURIComponent(b.number)}&market=US&limit=25`);
+    const want = (b.set || "").toLowerCase();
+    const hit = (found.data || []).find(c => c.set && c.set.name && (c.set.name.toLowerCase() === want || want.includes(c.set.name.toLowerCase()) || c.set.name.toLowerCase().includes(want)))
+             || (found.data || [])[0];
+    if (!hit){ box.innerHTML = '<div class="note">Carte introuvable chez PokeTrace.</div>'; return; }
+    const pr = hit.prices && hit.prices.NEAR_MINT && hit.prices.NEAR_MINT.US && hit.prices.NEAR_MINT.US.ebay;
+    const avgTxt = pr ? `<div class="kv" style="margin-bottom:8px">${kv("Prix moyen eBay (état proche de neuf)", "$" + Number(pr.avg).toFixed(2))}${kv("Nombre de ventes", pr.saleCount)}</div>` : "";
+    let list = "";
+    try {
+      const l = await pkGet(`/cards/${encodeURIComponent(hit.id)}/listings?limit=10&sort=sold_at_desc`);
+      const items = (l.data || []).filter(x => x.listingType === "sold");
+      list = items.length
+        ? `<div class="sold">${items.map(x => `<a href="${esc(x.listingUrl)}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>$${(x.price).toFixed(2)}</b></a>`).join("")}</div>`
+        : '<div class="note">Aucune vente détaillée trouvée.</div>';
+    } catch(e){
+      list = e.message === "quota" ? '<div class="note">Quota dépassé ou formule insuffisante.</div>'
+           : e.message === "auth" ? '<div class="note">Clé refusée. Vérifie-la dans « Filtres et tri ».</div>'
+           : '<div class="note">Les ventes détaillées demandent une formule Scale ou Business.</div>';
+    }
+    box.innerHTML = avgTxt + list;
+  } catch(e){
+    box.innerHTML = e.message === "auth" ? '<div class="note">Clé refusée. Vérifie-la dans « Filtres et tri ».</div>'
+                  : '<div class="note">PokeTrace ne répond pas pour le moment.</div>';
+  }
+}
 
 // ===== Fiche détaillée d’une carte =====
 const dc = {};
@@ -577,7 +666,8 @@ function renderOv(){
       const ys = hist.map(q => q[1]);
       h += sec("Mon historique", chart(hist.map(q => ({x:Date.parse(q[0]) / 86400000, y:q[1]})), 320, 110) + grid([kv("Plus bas", eur(Math.min(...ys))), kv("Plus haut", eur(Math.max(...ys)))]) + '<div class="note">Un point par jour où tu as ouvert l’appli depuis l’ajout de la carte.</div>');
     }
-    h += sec("Ventes réelles", `<div class="r">${soldLinks(b)}</div><div class="note">Aucune source gratuite ne donne la liste des dernières ventes carte par carte. Ces liens ouvrent les ventes terminées sur eBay (les plus récentes d’abord) et l’historique PriceCharting.</div>`);
+    h += sec("Ventes récentes (eBay)", `<div id="soldbox"><div class="note">Chargement…</div></div>`);
+    h += sec("Ventes terminées (liens)", `<div class="r">${soldLinks(b)}</div>`);
     // Prix Cardmarket (EUR)
     const cmRows = [kv("Tendance", e2(cm.trend)), kv("Moyenne", e2(cm.avg)), kv("Le moins cher", e2(cm.low)),
       kv("Moyenne sur 1 jour", e2(cm.avg1)), kv("Moyenne sur 7 jours", e2(cm.avg7)), kv("Moyenne sur 30 jours", e2(cm.avg30)),
@@ -628,6 +718,7 @@ function renderOv(){
   const y = $("ovl").scrollTop;
   $("ovl").innerHTML = `<div class="ovbar"><b>${esc(b.name)}</b><button type="button" data-close="1">Fermer</button></div><div class="ovb">${h}</div>`;
   $("ovl").scrollTop = y;
+  if (cs && !cs.loading && !cs.soldDone){ cs.soldDone = true; loadSold(b); }
 }
 
 $("ovl").addEventListener("click", e => {
@@ -637,6 +728,75 @@ $("ovl").addEventListener("click", e => {
   const mb = e.target.closest("button[data-m]");
   if (mb){ doMine(mb.dataset.id, mb.dataset.m); renderOv(); }
 });
+
+// ===== Sauvegarde, import et restauration =====
+function lastBk(){ try { return localStorage.getItem("lastbk") || ""; } catch(e){ return ""; } }
+function bkOld(){ const d = lastBk(); return !d || (Date.now() - Date.parse(d)) > 14 * 86400000; }
+function setBk(t){ $("bkstate").textContent = t; }
+function bkInfo(){ setBk(lastBk() ? "Dernière sauvegarde : " + (dateFr(lastBk()) || lastBk()) + "." : "Aucune sauvegarde faite pour l’instant."); }
+function markBk(){ try { localStorage.setItem("lastbk", today); } catch(e){} bkInfo(); }
+function bkData(){ return JSON.stringify({app:"cote-cartes", v:1, date:new Date().toISOString(), suivi:load(), mine:loadM()}, null, 1); }
+
+async function bkExport(){
+  const data = bkData(), name = "cote-cartes-" + today + ".json";
+  try {
+    const f = new File([data], name, {type:"application/json"});
+    if (navigator.canShare && navigator.canShare({files:[f]})){ await navigator.share({files:[f], title:"Sauvegarde Cote Cartes"}); markBk(); return; }
+  } catch(e){ if (e && e.name === "AbortError") return; }
+  try {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([data], {type:"application/json"}));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    markBk();
+  } catch(e){ setBk("Export impossible ici. Utilise « Copier les données »."); }
+}
+function applyImport(text){
+  let d;
+  try { d = JSON.parse(text); } catch(e){ return setBk("Ce n’est pas une sauvegarde valide."); }
+  if (!d || d.app !== "cote-cartes" || (!Array.isArray(d.suivi) && !Array.isArray(d.mine))) return setBk("Ce n’est pas une sauvegarde Cote Cartes.");
+  const n1 = Array.isArray(d.suivi) ? d.suivi.length : 0, n2 = Array.isArray(d.mine) ? d.mine.length : 0;
+  if (!confirm("Importer " + n2 + " carte" + (n2 > 1 ? "s" : "") + " dans Mes cartes et " + n1 + " dans À surveiller ? Les cartes déjà présentes seront mises à jour.")) return;
+  const merge = (cur, inc) => { const m = new Map(cur.map(c => [c.id, c])); inc.forEach(c => { if (c && c.id) m.set(c.id, c); }); return [...m.values()]; };
+  if (Array.isArray(d.suivi)) save(merge(load(), d.suivi));
+  if (Array.isArray(d.mine)) saveM(merge(loadM(), d.mine.map(c => Object.assign({}, c, {qty:Math.max(1, parseInt(c.qty, 10) || 1)}))));
+  refreshView();
+  setBk("Import terminé : " + n2 + " carte" + (n2 > 1 ? "s" : "") + " dans Mes cartes, " + n1 + " dans À surveiller.");
+}
+$("bkexp").addEventListener("click", bkExport);
+$("bkcopy").addEventListener("click", () => {
+  try { navigator.clipboard.writeText(bkData()).then(() => { markBk(); setBk("Données copiées. Colle-les dans Notes pour les garder."); }, () => setBk("Copie refusée par Safari.")); }
+  catch(e){ setBk("Copie impossible ici."); }
+});
+$("bkimp").addEventListener("click", () => $("bkfile").click());
+$("bkfile").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => applyImport(String(r.result));
+  r.readAsText(f);
+  e.target.value = "";
+});
+$("bkpaste").addEventListener("click", () => {
+  try { navigator.clipboard.readText().then(applyImport, () => setBk("Lecture du presse-papiers refusée. Autorise « Coller » ou utilise le fichier.")); }
+  catch(e){ setBk("Collage impossible ici. Utilise le fichier."); }
+});
+bkInfo();
+
+// Au démarrage : demande un stockage durable, et restaure depuis la copie de secours si besoin
+(async () => {
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){}
+  let restored = false;
+  for (const k of ["suivi", "mine", "pkkey"]){
+    let cur = null;
+    try { cur = localStorage.getItem(k); } catch(e){}
+    if (cur === null){
+      const v = await idbGet(k);
+      if (v){ try { localStorage.setItem(k, v); restored = true; } catch(e){} }
+    } else { idbSet(k, cur); }
+  }
+  pkShowState();
+  if (restored){ refreshView(); setBk("Tes données ont été restaurées automatiquement."); }
+})();
 
 $("f").addEventListener("submit", e => {
   e.preventDefault();
