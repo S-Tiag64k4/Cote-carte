@@ -14,7 +14,9 @@
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,system-ui,"Segoe UI",sans-serif}
 body{padding:env(safe-area-inset-top,0) 0 0}
 header{position:sticky;top:0;background:var(--bg);padding:12px 14px 8px;z-index:5;border-bottom:1px solid var(--line)}
-h1{font-size:22px;margin:0 0 10px;letter-spacing:-.3px}
+h1{font-size:22px;margin:0;letter-spacing:-.3px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+button.ghost{background:transparent;color:var(--blue);border:1px solid var(--line);padding:7px 12px;font-size:14px}
 form{display:flex;gap:8px}
 input,select{font:inherit;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 #q{flex:1}
@@ -89,7 +91,7 @@ body.lock{overflow:hidden}
 </head>
 <body>
 <header>
-  <h1>Cote Cartes</h1>
+  <div class="top"><h1>Cote Cartes</h1><button id="gear" type="button" class="ghost">Réglages</button></div>
   <form id="f">
     <input id="q" placeholder="Pokémon, en français ou anglais" enterkeyhint="search" autocomplete="off" autocapitalize="off">
     <button>Chercher</button>
@@ -119,23 +121,32 @@ body.lock{overflow:hidden}
       </label>
       <label class="chk"><input type="checkbox" id="priced" checked> Masquer les cartes sans prix</label>
     </div>
-    <div class="note" style="margin-top:14px"><b>Clé PokeTrace</b> (pour les ventes eBay détaillées). Elle reste enregistrée uniquement sur cet iPhone.</div>
-    <div class="kf"><input id="pkkey" type="password" placeholder="Colle la clé ici" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="pksave" type="button" class="alt">Enregistrer</button></div>
-    <div class="bk"><button id="pktest" type="button">Tester la clé</button></div>
-    <div class="note" id="pkstate"></div>
-    <div class="note" style="margin-top:14px"><b>Sauvegarde de mes données</b> (Mes cartes, À surveiller). À faire de temps en temps, et avant de supprimer l’icône de l’appli.</div>
-    <div class="bk">
-      <button id="bkexp" type="button">Exporter (fichier)</button>
-      <button id="bkcopy" type="button">Copier les données</button>
-      <button id="bkimp" type="button">Importer (fichier)</button>
-      <button id="bkpaste" type="button">Coller les données</button>
-    </div>
-    <input type="file" id="bkfile" accept=".json,application/json" hidden>
-    <div class="note" id="bkstate"></div>
   </details>
   <div id="out"><div class="msg">Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée.</div></div>
 </main>
 <div id="ovl" class="ov" hidden></div>
+<div id="setov" class="ov" hidden>
+  <div class="ovbar"><b>Réglages</b><button type="button" id="setclose">Fermer</button></div>
+  <div class="ovb">
+    <div class="sec"><h3>Clé PokeTrace</h3>
+      <div class="note" style="margin-top:0">Pour les ventes eBay détaillées. Elle reste enregistrée uniquement sur cet iPhone.</div>
+      <div class="kf"><input id="pkkey" type="password" placeholder="Colle la clé ici" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="pksave" type="button">Enregistrer</button></div>
+      <div class="bk"><button id="pktest" type="button">Tester la clé</button></div>
+      <div class="note" id="pkstate"></div>
+    </div>
+    <div class="sec"><h3>Sauvegarde de mes données</h3>
+      <div class="note" style="margin-top:0">Mes cartes et À surveiller. À faire de temps en temps, et avant de supprimer l’icône de l’appli.</div>
+      <div class="bk">
+        <button id="bkexp" type="button">Exporter (fichier)</button>
+        <button id="bkcopy" type="button">Copier les données</button>
+        <button id="bkimp" type="button">Importer (fichier)</button>
+        <button id="bkpaste" type="button">Coller les données</button>
+      </div>
+      <input type="file" id="bkfile" accept=".json,application/json" hidden>
+      <div class="note" id="bkstate"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 // Données : TCGdex (gratuit, sans clé, noms en français). Prix : Cardmarket, en euros.
@@ -492,7 +503,7 @@ function renderMine(list){
       kv("Investi (cartes avec prix d’achat)", inv > 0 ? eur(inv) : null),
       kv("Gain ou perte", g != null ? sgn(g) + " (" + sgnp(invVal / inv - 1) + ")" : null),
       kv("À vendre bientôt ?", signals ? signals + " carte" + (signals > 1 ? "s" : "") : null)])}
-      <div class="note">Valeur au prix tendance Cardmarket, avant frais de vente. Les indications « vendre » ou « garder » reposent sur les moyennes 7 et 30 jours : ce sont des repères simples, pas des conseils financiers.</div>${bkOld() ? '<div class="note">Pense à sauvegarder tes données : ouvre « Filtres et tri », puis « Exporter ».</div>' : ""}</div>
+      <div class="note">Valeur au prix tendance Cardmarket, avant frais de vente. Les indications « vendre » ou « garder » reposent sur les moyennes 7 et 30 jours : ce sont des repères simples, pas des conseils financiers.</div>${bkOld() ? '<div class="note">Pense à sauvegarder tes données : ouvre « Réglages », puis « Exporter (fichier) ».</div>' : ""}</div>
     <div id="list">${rows.map(rowMine).join("")}</div>`;
 }
 
@@ -587,7 +598,7 @@ async function pkGet(path){
 function pkErr(e){
   const st = e.status, m = (e.message && e.message !== "timeout") ? " (" + String(e.message).slice(0, 140) + ")" : "";
   if (e.message === "timeout") return "PokeTrace met trop de temps à répondre. Réessaie dans un instant.";
-  if (st === 401) return "Clé refusée par PokeTrace. Vérifie-la dans « Filtres et tri »." + m;
+  if (st === 401) return "Clé refusée par PokeTrace. Vérifie-la dans « Réglages »." + m;
   if (st === 429) return "Limite de requêtes PokeTrace atteinte" + (/^\d+$/.test(e.retry) ? " : réessaie dans " + e.retry + " s." : ". Attends un moment puis réessaie : ta formule a peut-être une limite basse ou journalière.") + m + (e.rl ? " [" + e.rl + "]" : "");
   if (st === 402 || st === 403) return "Ta formule PokeTrace ne donne pas accès à cette donnée." + m;
   return "PokeTrace a répondu avec une erreur" + (st ? " " + st : "") + "." + m;
@@ -627,7 +638,7 @@ function soldInit(b){
   if (cs.soldHtml) return cs.soldHtml;
   const c = pkc()[b.id];
   if (c && c.d === today){ cs.soldHtml = c.h; return c.h; }
-  return pkKey() ? soldBtn() : '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay.</div>';
+  return pkKey() ? soldBtn() : '<div class="note">Ajoute ta clé PokeTrace dans « Réglages » (en haut à droite) pour voir les ventes eBay.</div>';
 }
 function setSold(id, html, keep){
   if (keep) pkcSet(id, html);
@@ -661,7 +672,7 @@ const usd2 = n => (typeof n === "number" && n > 0) ? "$" + n.toFixed(2) : null;
 
 async function loadSold(b, enName, cursor){
   const id = b.id;
-  if (!pkKey()){ setSold(id, '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay.</div>'); return; }
+  if (!pkKey()){ setSold(id, '<div class="note">Ajoute ta clé PokeTrace dans « Réglages » (en haut à droite) pour voir les ventes eBay.</div>'); return; }
   setSold(id, '<div class="note">Recherche chez PokeTrace…</div>');
   try {
     let card = null, pid = pkMap()[id];
@@ -907,6 +918,8 @@ $("bkpaste").addEventListener("click", () => {
   catch(e){ setBk("Collage impossible ici. Utilise le fichier."); }
 });
 bkInfo();
+$("gear").addEventListener("click", () => { pkShowState(); bkInfo(); $("setov").hidden = false; $("setov").scrollTop = 0; document.body.classList.add("lock"); });
+$("setclose").addEventListener("click", () => { $("setov").hidden = true; document.body.classList.remove("lock"); });
 
 // Au démarrage : demande un stockage durable, et restaure depuis la copie de secours si besoin
 (async () => {
