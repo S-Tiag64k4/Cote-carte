@@ -69,6 +69,8 @@ body.lock{overflow:hidden}
 .k-hold{background:var(--blue);color:var(--bg)}
 .qty{color:var(--mute);font-weight:600;font-size:14px}
 .spk{display:block;width:100%;height:auto;margin-top:6px}
+.lbl{fill:var(--mute);font-size:11px;font-family:-apple-system,system-ui,sans-serif}
+.lbl.v{fill:var(--ink);font-weight:600}
 .spk.up{color:var(--green)}
 .spk.dn{color:var(--alert)}
 .c .spk{max-width:140px}
@@ -196,17 +198,27 @@ function verdict(c){
   return {k:"ok", txt:"Garder", why:"Prix stable (" + sgnp(d30) + " sur 30 jours)."};
 }
 
-// Mini-courbe SVG. pts = [{x, y}] triés par x
+// Courbe SVG avec les valeurs (grand format) ou simple trait (petit format). pts = [{x, y, l?}] triés par x
 function chart(pts, w, h){
+  const big = w > 200, px = big ? 34 : 5, top = big ? 24 : 5, bot = big ? 22 : 5;
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs), lo = Math.min(...ys), hi = Math.max(...ys), pad = 5;
-  const X = x => pad + (x1 === x0 ? 0 : (x - x0) / (x1 - x0)) * (w - 2 * pad);
-  const Y = y => hi === lo ? h / 2 : h - pad - (y - lo) / (hi - lo) * (h - 2 * pad);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), lo = Math.min(...ys), hi = Math.max(...ys);
+  const X = x => px + (x1 === x0 ? (w - 2 * px) / 2 : (x - x0) / (x1 - x0) * (w - 2 * px));
+  const Y = y => hi === lo ? (top + h - bot) / 2 : (h - bot) - (y - lo) / (hi - lo) * (h - bot - top);
   const line = pts.map(p => X(p.x).toFixed(1) + "," + Y(p.y).toFixed(1)).join(" ");
-  const dots = pts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${w > 200 ? 3.5 : 2.5}" fill="currentColor"/>`).join("");
-  return `<svg class="spk ${pts[pts.length - 1].y >= pts[0].y ? "up" : "dn"}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Évolution du prix"><polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+  const dots = pts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${big ? 3.5 : 2.5}" fill="currentColor"/>`).join("");
+  let txt = "";
+  if (big){
+    const n = pts.length, iMin = ys.indexOf(lo), iMax = ys.indexOf(hi);
+    pts.forEach((p, i) => {
+      if (n <= 6 || i === 0 || i === n - 1 || i === iMin || i === iMax)
+        txt += `<text class="lbl v" x="${X(p.x).toFixed(1)}" y="${(Y(p.y) - 9).toFixed(1)}" text-anchor="middle">${esc(eur(p.y))}</text>`;
+      if (p.l) txt += `<text class="lbl" x="${X(p.x).toFixed(1)}" y="${h - 5}" text-anchor="middle">${esc(p.l)}</text>`;
+    });
+  }
+  return `<svg class="spk ${pts[pts.length - 1].y >= pts[0].y ? "up" : "dn"}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Évolution du prix"><polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}${txt}</svg>`;
 }
-const cmPts = c => [{x:-15, y:c.avg30}, {x:-3.5, y:c.avg7}, {x:-0.5, y:c.avg1}, {x:0, y:c.trend}].filter(q => q.y > 0);
+const cmPts = c => [{y:c.avg30, l:"30 j"}, {y:c.avg7, l:"7 j"}, {y:c.avg1, l:"1 j"}, {y:c.trend, l:"Auj."}].filter(q => q.y > 0).map((q, i) => Object.assign(q, {x:i}));
 
 // Deuxième copie des données dans IndexedDB (sécurité si localStorage est vidé)
 const idb = new Promise(res => { try { const r = indexedDB.open("cote", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch(e){ res(null); } });
@@ -454,7 +466,7 @@ function rowMine(c){
       ${c.trend == null ? '<div class="p none">Pas de prix</div>' : `<div class="p">${eur(c.trend)}</div>`}
       ${l1 || l2 ? `<div class="d">${esc([l1, l2].filter(Boolean).join(" · "))}</div>` : ""}
       <span class="badge k-${v.k}">${esc(v.txt)}</span>
-      ${pts.length >= 2 ? chart(pts, 120, 34) : ""}
+      ${pts.length >= 2 ? chart(pts, 120, 34) + `<div class="d">${esc(pts[0].l + " " + eur(pts[0].y) + " → " + pts[pts.length - 1].l + " " + eur(pts[pts.length - 1].y))}</div>` : ""}
       <div class="r"><button data-id="${esc(c.id)}" data-m="edit">Modifier</button><button data-id="${esc(c.id)}" data-m="del">Retirer</button></div>
     </div></div>`;
 }
@@ -541,44 +553,120 @@ async function pkGet(path){
   if (!key) throw new Error("nokey");
   const r = await Promise.race([
     fetch(PK + path, {headers:{"X-API-Key": key}}),
-    new Promise((_, rej) => setTimeout(() => rej(new Error("trop lent")), 20000))
+    new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 20000))
   ]);
-  if (r.status === 401 || r.status === 403) throw new Error("auth");
-  if (r.status === 402 || r.status === 429) throw new Error("quota");
-  if (!r.ok) throw new Error("erreur " + r.status);
+  if (!r.ok){
+    let m = "";
+    try { const j = await r.json(); m = (j && (j.message || (j.error && (j.error.message || j.error)) || j.detail)) || ""; } catch(e){}
+    const err = new Error(typeof m === "string" ? m : JSON.stringify(m));
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 }
+function pkErr(e){
+  const st = e.status, m = (e.message && e.message !== "timeout") ? " (" + String(e.message).slice(0, 140) + ")" : "";
+  if (e.message === "timeout") return "PokeTrace met trop de temps à répondre. Rouvre la carte dans un instant.";
+  if (st === 401) return "Clé refusée par PokeTrace. Vérifie-la dans « Filtres et tri »." + m;
+  if (st === 429) return "Trop de requêtes envoyées à PokeTrace : attends une minute puis rouvre la carte." + m;
+  if (st === 402 || st === 403) return "Ta formule PokeTrace ne donne pas accès à cette donnée." + m;
+  return "PokeTrace a répondu avec une erreur" + (st ? " " + st : "") + "." + m;
+}
 
-// Ventes récentes eBay (demande l’id PokeTrace de la carte via la recherche)
-async function loadSold(b){
-  const box = document.getElementById("soldbox");
-  if (!box) return;
-  if (!pkKey()){ box.innerHTML = '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay détaillées.</div>'; return; }
+const skc = {};
+const pkMap = () => { try { return JSON.parse(localStorage.getItem("pkmap") || "{}"); } catch(e){ return {}; } };
+const pkMapSet = (id, v) => { try { const m = pkMap(); if (v) m[id] = v; else delete m[id]; localStorage.setItem("pkmap", JSON.stringify(m)); } catch(e){} };
+const norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const numNorm = t => { const m = String(t || "").split("/")[0].trim().toLowerCase(); return /^\d+$/.test(m) ? String(parseInt(m, 10)) : m; };
+const slug = t => String(t || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const TIERS = {NEAR_MINT:"Proche du neuf", LIGHTLY_PLAYED:"Légèrement jouée", MODERATELY_PLAYED:"Moyennement jouée", HEAVILY_PLAYED:"Très jouée", DAMAGED:"Abîmée"};
+
+function setSold(id, html, keep){
+  if (keep) skc[id] = html;
+  if (cs && cs.base.id === id){
+    cs.soldHtml = html;
+    const el = document.getElementById("soldbox");
+    if (el) el.innerHTML = html;
+  }
+}
+
+// Trouve la carte chez PokeTrace : numéro + extension, puis on retient l’identifiant
+async function findPk(b, enName){
+  const known = pkMap()[b.id];
+  if (known) return known;
+  const want = numNorm(b.number), ws = norm(b.set), tot = String(b.total || "");
+  const pick = list => {
+    const c = list.filter(x => numNorm(x.cardNumber) === want);
+    return c.find(x => { const n = norm(x.set && x.set.name); return n && (n === ws || n.includes(ws) || ws.includes(n)); })
+        || c.find(x => tot && String(x.cardNumber || "").split("/")[1] && parseInt(String(x.cardNumber).split("/")[1], 10) === parseInt(tot, 10))
+        || (c.length === 1 ? c[0] : null);
+  };
   try {
-    const q = encodeURIComponent(b.name);
-    const found = await pkGet(`/cards?search=${q}&card_number=${encodeURIComponent(b.number)}&market=US&limit=25`);
-    const want = (b.set || "").toLowerCase();
-    const hit = (found.data || []).find(c => c.set && c.set.name && (c.set.name.toLowerCase() === want || want.includes(c.set.name.toLowerCase()) || c.set.name.toLowerCase().includes(want)))
-             || (found.data || [])[0];
-    if (!hit){ box.innerHTML = '<div class="note">Carte introuvable chez PokeTrace.</div>'; return; }
-    const pr = hit.prices && hit.prices.NEAR_MINT && hit.prices.NEAR_MINT.US && hit.prices.NEAR_MINT.US.ebay;
-    const avgTxt = pr ? `<div class="kv" style="margin-bottom:8px">${kv("Prix moyen eBay (état proche de neuf)", "$" + Number(pr.avg).toFixed(2))}${kv("Nombre de ventes", pr.saleCount)}</div>` : "";
-    let list = "";
-    try {
-      const l = await pkGet(`/cards/${encodeURIComponent(hit.id)}/listings?limit=10&sort=sold_at_desc`);
-      const items = (l.data || []).filter(x => x.listingType === "sold");
-      list = items.length
-        ? `<div class="sold">${items.map(x => `<a href="${esc(x.listingUrl)}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>$${(x.price).toFixed(2)}</b></a>`).join("")}</div>`
-        : '<div class="note">Aucune vente détaillée trouvée.</div>';
-    } catch(e){
-      list = e.message === "quota" ? '<div class="note">Quota dépassé ou formule insuffisante.</div>'
-           : e.message === "auth" ? '<div class="note">Clé refusée. Vérifie-la dans « Filtres et tri ».</div>'
-           : '<div class="note">Les ventes détaillées demandent une formule Scale ou Business.</div>';
+    const r = await pkGet(`/cards?search=${encodeURIComponent(enName)}&set=${encodeURIComponent(slug(b.set))}&market=US&limit=50`);
+    const h = pick(r.data || []);
+    if (h) return h.id;
+  } catch(e){ if (e.status === 401 || e.status === 429 || e.message === "timeout") throw e; }
+  let cur = "";
+  for (let i = 0; i < 3; i++){
+    const r = await pkGet(`/cards?search=${encodeURIComponent(enName)}&market=US&limit=50${cur ? "&cursor=" + encodeURIComponent(cur) : ""}`);
+    const h = pick(r.data || []);
+    if (h) return h.id;
+    if (!(r.pagination && r.pagination.hasMore && r.pagination.nextCursor)) break;
+    cur = r.pagination.nextCursor;
+  }
+  return null;
+}
+
+function ebayStat(card){
+  const p = card.prices || {};
+  const tiers = Object.keys(p).filter(k => !/^(PSA|BGS|CGC|SGC|TAG|ACE)_/.test(k) && k !== "AGGREGATED")
+    .sort((a, b) => (a === "NEAR_MINT" ? 0 : 1) - (b === "NEAR_MINT" ? 0 : 1));
+  for (const k of tiers){
+    const e = p[k] && p[k].US && p[k].US.ebay;
+    if (e && e.avg > 0) return {tier:k, e};
+  }
+  return null;
+}
+const usd2 = n => (typeof n === "number" && n > 0) ? "$" + n.toFixed(2) : null;
+
+async function loadSold(b, enName){
+  const id = b.id;
+  if (skc[id]){ setSold(id, skc[id]); return; }
+  if (!pkKey()){ setSold(id, '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay détaillées.</div>'); return; }
+  try {
+    const pid = await findPk(b, enName);
+    if (!pid){
+      setSold(id, `<div class="note">Carte introuvable chez PokeTrace (cherché : ${esc(enName)} n° ${esc(b.number)}). Les cartes très récentes ou européennes n’y sont pas toutes.</div>`);
+      return;
     }
-    box.innerHTML = avgTxt + list;
+    pkMapSet(id, pid);
+    let card;
+    try { card = (await pkGet(`/cards/${encodeURIComponent(pid)}`)).data || {}; }
+    catch(e){ if (e.status === 404) pkMapSet(id, null); throw e; }
+    const st = ebayStat(card);
+    let html = st ? grid([kv("État", TIERS[st.tier] || st.tier), kv("Prix moyen eBay", usd2(st.e.avg)), kv("Moyenne 7 jours", usd2(st.e.avg7d)),
+                          kv("Le plus bas", usd2(st.e.low)), kv("Le plus haut", usd2(st.e.high)), kv("Nombre de ventes", st.e.saleCount)])
+                  : '<div class="note">Pas de prix de vente eBay pour cette carte chez PokeTrace.</div>';
+    let ok = true, noList = false;
+    try { noList = localStorage.getItem("pknolist") === today; } catch(e){}
+    if (noList) html += '<div class="note">Les ventes détaillées demandent une formule PokeTrace Scale ou Business.</div>';
+    else {
+      try {
+        const l = await pkGet(`/cards/${encodeURIComponent(pid)}/listings?limit=10&sort=sold_at_desc`);
+        const items = (l.data || []).filter(x => x.listingType === "sold");
+        html += items.length
+          ? `<div class="sold" style="margin-top:10px">${items.map(x => `<a href="${esc(x.listingUrl)}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>${usd2(Number(x.price)) || ""}</b></a>`).join("")}</div>`
+          : '<div class="note">Aucune vente détaillée trouvée.</div>';
+      } catch(e){
+        if (e.status === 402 || e.status === 403){
+          try { localStorage.setItem("pknolist", today); } catch(e2){}
+          html += '<div class="note">Les ventes détaillées demandent une formule PokeTrace Scale ou Business.</div>';
+        } else { ok = false; html += `<div class="note">${esc(pkErr(e))}</div>`; }
+      }
+    }
+    setSold(id, html, ok);
   } catch(e){
-    box.innerHTML = e.message === "auth" ? '<div class="note">Clé refusée. Vérifie-la dans « Filtres et tri ».</div>'
-                  : '<div class="note">PokeTrace ne répond pas pour le moment.</div>';
+    setSold(id, `<div class="note">${esc(pkErr(e))}</div>`);
   }
 }
 
@@ -660,13 +748,13 @@ function renderOv(){
         kv("Ajoutée le", m.added ? dateFr(m.added) : null)]));
     }
     const pts = cmPts(cv);
-    if (pts.length >= 2) h += sec("Évolution du prix", chart(pts, 320, 110) + '<div class="note">Moyennes Cardmarket sur 30 jours, 7 jours et 1 jour, puis prix tendance actuel.</div>');
+    if (pts.length >= 2) h += sec("Évolution du prix", chart(pts, 320, 150) + '<div class="note">Moyennes Cardmarket sur 30 jours, 7 jours et 1 jour, puis prix tendance actuel.</div>');
     const hist = (m && m.hist || []).filter(q => q[1] > 0);
     if (hist.length >= 2){
       const ys = hist.map(q => q[1]);
-      h += sec("Mon historique", chart(hist.map(q => ({x:Date.parse(q[0]) / 86400000, y:q[1]})), 320, 110) + grid([kv("Plus bas", eur(Math.min(...ys))), kv("Plus haut", eur(Math.max(...ys)))]) + '<div class="note">Un point par jour où tu as ouvert l’appli depuis l’ajout de la carte.</div>');
+      h += sec("Mon historique", chart(hist.map((q, i) => ({x:Date.parse(q[0]) / 86400000, y:q[1], l:(i === 0 || i === hist.length - 1) ? new Date(q[0]).toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"}) : ""})), 320, 150) + grid([kv("Plus bas", eur(Math.min(...ys))), kv("Plus haut", eur(Math.max(...ys)))]) + '<div class="note">Un point par jour où tu as ouvert l’appli depuis l’ajout de la carte.</div>');
     }
-    h += sec("Ventes récentes (eBay)", `<div id="soldbox"><div class="note">Chargement…</div></div>`);
+    h += sec("Ventes récentes (eBay)", `<div id="soldbox">${cs.soldHtml || '<div class="note">Chargement…</div>'}</div>`);
     h += sec("Ventes terminées (liens)", `<div class="r">${soldLinks(b)}</div>`);
     // Prix Cardmarket (EUR)
     const cmRows = [kv("Tendance", e2(cm.trend)), kv("Moyenne", e2(cm.avg)), kv("Le moins cher", e2(cm.low)),
@@ -718,7 +806,7 @@ function renderOv(){
   const y = $("ovl").scrollTop;
   $("ovl").innerHTML = `<div class="ovbar"><b>${esc(b.name)}</b><button type="button" data-close="1">Fermer</button></div><div class="ovb">${h}</div>`;
   $("ovl").scrollTop = y;
-  if (cs && !cs.loading && !cs.soldDone){ cs.soldDone = true; loadSold(b); }
+  if (cs && !cs.loading && !cs.soldDone){ cs.soldDone = true; loadSold(b, (cs.en || cs.fr || {}).name || b.name); }
 }
 
 $("ovl").addEventListener("click", e => {
