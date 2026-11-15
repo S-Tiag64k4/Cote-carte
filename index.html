@@ -20,7 +20,7 @@ input,select{font:inherit;min-width:0;padding:11px 12px;border:1px solid var(--l
 #q{flex:1}
 button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--blue);color:#fff;font-weight:600}
 nav{display:flex;gap:6px;margin-top:10px}
-nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line)}
+nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line);padding:10px 4px;font-size:15px}
 nav button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 main{padding:12px 14px calc(110px + env(safe-area-inset-bottom,0px));display:grid;gap:12px}
 details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
@@ -63,6 +63,18 @@ body.lock{overflow:hidden}
 .atk{padding:8px 0;border-top:1px solid var(--line)}
 .atk:first-of-type{border-top:0;padding-top:0}
 .dmg{float:right;font-weight:700}
+.badge{display:inline-block;font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;margin:4px 0;background:var(--line);color:var(--ink)}
+.k-sell{background:var(--green);color:var(--bg)}
+.k-warn{background:var(--alert);color:var(--bg)}
+.k-hold{background:var(--blue);color:var(--bg)}
+.qty{color:var(--mute);font-weight:600;font-size:14px}
+.spk{display:block;width:100%;height:auto;margin-top:6px}
+.spk.up{color:var(--green)}
+.spk.dn{color:var(--alert)}
+.c .spk{max-width:140px}
+.why{font-size:14px;color:var(--mute);margin:6px 0 10px}
+.note{font-size:13px;color:var(--mute);margin-top:8px}
+.sec + #list{margin-top:12px}
 </style>
 </head>
 <body>
@@ -74,7 +86,8 @@ body.lock{overflow:hidden}
   </form>
   <nav>
     <button id="t1" class="on" type="button">Recherche</button>
-    <button id="t2" type="button">Suivi</button>
+    <button id="t2" type="button">À surveiller</button>
+    <button id="t3" type="button">Mes cartes</button>
   </nav>
 </header>
 <main>
@@ -113,15 +126,78 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const eur = n => n == null ? "—" : n.toLocaleString("fr-FR", {style:"currency", currency:"EUR"});
 const msg = t => `<div class="msg">${t}</div>`;
 const pos = v => (typeof v === "number" && v > 0) ? v : null;
+const sgn = n => (n > 0 ? "+" : n < 0 ? "−" : "") + eur(Math.abs(n));
+const sgnp = p => (p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p * 100).toFixed(1).replace(".", ",") + " %";
+
+// Image de remplacement (si aucune image n’existe pour la carte)
+const PH = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 117"><rect x="2" y="2" width="80" height="113" rx="8" fill="#2a3555" stroke="#667089" stroke-width="2"/><text x="42" y="56" font-family="sans-serif" font-size="9" fill="#98a2bd" text-anchor="middle">Image non</text><text x="42" y="68" font-family="sans-serif" font-size="9" fill="#98a2bd" text-anchor="middle">disponible</text></svg>');
+// Liste des adresses d’image à essayer, dans l’ordre
+function imgSrcs(c, q){
+  const base = c.ib || (c.img || "").replace(/\/(low|high)\.(webp|png|jpg)$/, "");
+  const out = [];
+  if (base){
+    out.push(`${base}/${q}.webp`, `${base}/${q}.png`);
+    const sw = base.includes("/en/") ? base.replace("/en/", "/fr/") : base.replace("/fr/", "/en/");
+    if (sw !== base) out.push(`${sw}/${q}.webp`);
+  }
+  if (c.setId && c.number) out.push(`https://images.pokemontcg.io/${c.setId}/${c.number}${q === "high" ? "_hires" : ""}.png`);
+  return out;
+}
+function imgTag(c){
+  const s = imgSrcs(c, "low");
+  return `<img src="${esc(s[0] || PH)}" data-alt="${esc(s.slice(1).join("|"))}" alt="" loading="lazy">`;
+}
+// Si une image ne charge pas, on essaie la suivante, puis l’image de remplacement
+document.addEventListener("error", e => {
+  const im = e.target;
+  if (!im || im.tagName !== "IMG" || !im.hasAttribute("data-alt") || im.dataset.ph) return;
+  const q = (im.dataset.alt || "").split("|").filter(Boolean);
+  if (q.length){ im.src = q.shift(); im.dataset.alt = q.join("|"); }
+  else { im.dataset.ph = "1"; im.src = PH; }
+}, true);
+
+// Prix Cardmarket : valeurs normales, ou « holo » si la carte n’existe qu’en holo
+function cmVals(cm){
+  const g = k => pos(cm[k]) ?? pos(cm[k + "-holo"]);
+  return {trend: pos(cm.trend) ?? pos(cm["trend-holo"]) ?? pos(cm.avg) ?? pos(cm["avg-holo"]),
+          low:g("low"), avg1:g("avg1"), avg7:g("avg7"), avg30:g("avg30")};
+}
+
+// Indication « vendre ou garder » : repère simple basé sur les moyennes 7 et 30 jours
+function verdict(c){
+  const t = c.trend;
+  if (t == null) return {k:"na", txt:"Pas de prix", why:"Cardmarket n’a pas de prix pour cette carte."};
+  if (t < 1) return {k:"low", txt:"Faible valeur", why:"Sous 1 € : les variations sont trop petites pour dégager une vraie tendance."};
+  const d30 = c.avg30 ? t / c.avg30 - 1 : null, d7 = c.avg7 ? t / c.avg7 - 1 : null;
+  if (d30 == null) return {k:"ok", txt:"Garder", why:"Pas assez de données pour juger la tendance."};
+  if (d30 >= 0.15 && (d7 == null || d7 >= 0)) return {k:"sell", txt:"Bon moment pour vendre", why:"Le prix a monté de " + sgnp(d30) + " sur 30 jours et ne recule pas."};
+  if (d30 >= 0.15) return {k:"warn", txt:"Hausse qui s’essouffle", why:sgnp(d30) + " sur 30 jours, mais le prix recule cette semaine (" + sgnp(d7) + "). À vendre vite si tu veux profiter de la hausse."};
+  if (d30 <= -0.10) return {k:"hold", txt:"Garder", why:"En baisse de " + sgnp(d30) + " sur 30 jours : vendre maintenant, c’est vendre moins cher."};
+  return {k:"ok", txt:"Garder", why:"Prix stable (" + sgnp(d30) + " sur 30 jours)."};
+}
+
+// Mini-courbe SVG. pts = [{x, y}] triés par x
+function chart(pts, w, h){
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), lo = Math.min(...ys), hi = Math.max(...ys), pad = 5;
+  const X = x => pad + (x1 === x0 ? 0 : (x - x0) / (x1 - x0)) * (w - 2 * pad);
+  const Y = y => hi === lo ? h / 2 : h - pad - (y - lo) / (hi - lo) * (h - 2 * pad);
+  const line = pts.map(p => X(p.x).toFixed(1) + "," + Y(p.y).toFixed(1)).join(" ");
+  const dots = pts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${w > 200 ? 3.5 : 2.5}" fill="currentColor"/>`).join("");
+  return `<svg class="spk ${pts[pts.length - 1].y >= pts[0].y ? "up" : "dn"}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Évolution du prix"><polyline points="${line}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>${dots}</svg>`;
+}
+const cmPts = c => [{x:-15, y:c.avg30}, {x:-3.5, y:c.avg7}, {x:-0.5, y:c.avg1}, {x:0, y:c.trend}].filter(q => q.y > 0);
 
 function load(){ try { return JSON.parse(localStorage.getItem("suivi") || "[]"); } catch(e){ return []; } }
 function save(l){ try { localStorage.setItem("suivi", JSON.stringify(l)); } catch(e){} }
+function loadM(){ try { return JSON.parse(localStorage.getItem("mine") || "[]"); } catch(e){ return []; } }
+function saveM(l){ try { localStorage.setItem("mine", JSON.stringify(l)); } catch(e){} }
 
 // Mémoire des prix : valable pour la journée (Cardmarket met à jour une fois par jour)
 const today = new Date().toISOString().slice(0, 10);
 let pc = {day:today, items:{}};
-try { const s = JSON.parse(localStorage.getItem("pxcache") || "null"); if (s && s.day === today) pc = s; } catch(e){}
-function savePc(){ try { localStorage.setItem("pxcache", JSON.stringify(pc)); } catch(e){ pc.items = {}; } }
+try { const s = JSON.parse(localStorage.getItem("pxcache2") || "null"); if (s && s.day === today) pc = s; } catch(e){}
+function savePc(){ try { localStorage.setItem("pxcache2", JSON.stringify(pc)); } catch(e){ pc.items = {}; } }
 
 // Appel réseau simple, avec délai maximum et nouvel essai (sans AbortController)
 async function getJSON(url, tries, ms){
@@ -137,15 +213,31 @@ async function getJSON(url, tries, ms){
   throw last;
 }
 
-function slim(d, name){
+function slim(d, name, briefImg){
   const cm = (d.pricing && d.pricing.cardmarket) || {};
   const set = d.set || {};
-  return {id:d.id, name:name || d.name, number:d.localId, rarity:d.rarity || "",
+  const base = d.image || briefImg || "";
+  return Object.assign({id:d.id, name:name || d.name, number:d.localId, rarity:d.rarity || "",
           set:set.name || "?", setId:set.id || "?", total:set.cardCount && set.cardCount.official,
-          img:d.image ? d.image + "/low.webp" : "",
-          trend:pos(cm.trend) ?? pos(cm["trend-holo"]) ?? pos(cm.avg) ?? pos(cm["avg-holo"]),
-          low:pos(cm.low) ?? pos(cm["low-holo"]),
-          avg30:pos(cm.avg30) ?? pos(cm["avg30-holo"])};
+          ib:base, img:base ? base + "/low.webp" : ""}, cmVals(cm));
+}
+
+// Met à jour une carte enregistrée sans perdre son image si la nouvelle réponse n’en a pas
+function mergeFresh(c, f){
+  if (!f) return c;
+  const ib = c.ib, img = c.img;
+  Object.assign(c, f);
+  if (!c.ib && ib) c.ib = ib;
+  if (!c.img && img) c.img = img;
+  return c;
+}
+// Une ligne d’historique par jour
+function snap(c){
+  if (c.trend == null) return;
+  c.hist = c.hist || [];
+  const last = c.hist[c.hist.length - 1];
+  if (last && last[0] === today) last[1] = c.trend; else c.hist.push([today, c.trend]);
+  if (c.hist.length > 365) c.hist = c.hist.slice(-365);
 }
 
 async function detail(id){
@@ -160,20 +252,29 @@ function links(c){
           <a href="https://www.vinted.fr/catalog?search_text=${t}&order=price_low_to_high" target="_blank" rel="noopener">Vinted</a>`;
 }
 
+function soldLinks(c){
+  const num = c.total ? c.number + "/" + c.total : c.number;
+  const t = encodeURIComponent(c.name + " " + num + " pokemon");
+  return `<a href="https://www.ebay.fr/sch/i.html?_nkw=${t}&LH_Sold=1&LH_Complete=1&_sop=13" target="_blank" rel="noopener">Ventes eBay terminées</a>
+          <a href="https://www.pricecharting.com/search-products?q=${t}&type=prices" target="_blank" rel="noopener">PriceCharting</a>`;
+}
+
 function row(c, followed){
   const w = load().find(x => x.id === c.id);
+  const own = loadM().find(x => x.id === c.id);
   const hit = w && w.target != null && c.trend != null && c.trend <= w.target;
   const price = c.trend == null
     ? '<div class="p none">Pas de prix</div>'
     : `<div class="p">${eur(c.trend)}</div><div class="d">le moins cher ${eur(c.low)} · moyenne 30 j ${eur(c.avg30)}</div>`;
-  return `<div class="c" data-id="${esc(c.id)}"><img src="${esc(c.img)}" alt="" loading="lazy">
+  return `<div class="c" data-id="${esc(c.id)}">${imgTag(c)}
     <div class="b"><h2>${esc(c.name)}${hit ? '<span class="flag">Sous ton seuil</span>' : ""}</h2>
       <div class="s">${esc(c.set)} · n° ${esc(c.number)}${c.rarity ? " · " + esc(c.rarity) : ""}</div>
       ${price}
       ${w && w.target != null ? `<div class="d">Seuil : ${eur(w.target)}</div>` : ""}
       <div class="r">${links(c)}
-        <button data-id="${esc(c.id)}" data-act="${followed ? "set" : "add"}">${followed ? "Changer le seuil" : "Suivre"}</button>
+        <button data-id="${esc(c.id)}" data-act="${followed ? "set" : "add"}">${followed ? "Changer le seuil" : "Surveiller"}</button>
         ${followed ? `<button data-id="${esc(c.id)}" data-act="del">Retirer</button>` : ""}
+        <button data-id="${esc(c.id)}" data-m="${own ? "edit" : "add"}">${own ? "Dans mes cartes" : "J’ai la carte"}</button>
       </div></div></div>`;
 }
 
@@ -197,6 +298,8 @@ async function search(){
     const en = res[1].status === "fulfilled" ? res[1].value : [];
     const frName = {};
     fr.forEach(c => frName[c.id] = c.name);
+    const imgOf = {};
+    [...fr, ...en].forEach(c => { if (c.image && !imgOf[c.id]) imgOf[c.id] = c.image; });
     const ids = [...new Set([...fr, ...en].map(c => c.id))].slice(0, 600);
     if (!ids.length){ out.innerHTML = msg("Aucune carte trouvée. Essaie un autre nom."); return; }
 
@@ -207,7 +310,7 @@ async function search(){
       if (me !== run) return;
       let c = pc.items[id];
       if (!c){
-        try { c = slim(await detail(id), frName[id]); pc.items[id] = c; } catch(e){ fail++; }
+        try { c = slim(await detail(id), frName[id], imgOf[id]); pc.items[id] = c; } catch(e){ fail++; }
       }
       if (c) all.push(Object.assign({}, c, frName[id] ? {name:frName[id]} : {}));
       done++;
@@ -261,7 +364,7 @@ function view(){
 }
 
 function renderWatch(list){
-  out.innerHTML = list.length ? `<div id="list">${list.map(c => row(c, true)).join("")}</div>` : msg("Rien en suivi. Appuie sur « Suivre » depuis une recherche.");
+  out.innerHTML = list.length ? `<div id="list">${list.map(c => row(c, true)).join("")}</div>` : msg("Rien en suivi. Appuie sur « Surveiller » sur une carte pour la retrouver ici.");
 }
 
 async function showWatch(){
@@ -272,9 +375,96 @@ async function showWatch(){
   await pool(list, 6, async c => {
     try { fresh[c.id] = slim(await detail(c.id), c.name); } catch(e){}
   });
-  const cur = load().map(c => fresh[c.id] ? Object.assign(c, fresh[c.id]) : c);
+  const cur = load().map(c => mergeFresh(c, fresh[c.id]));
   save(cur);
   if (tab === 2) renderWatch(cur);
+}
+
+function refreshView(){
+  if (tab === 3) renderMine(loadM());
+  else if (tab === 2) renderWatch(load());
+  else if (all.length) view();
+}
+
+function doMine(id, act){
+  let list = loadM();
+  if (act === "del"){
+    if (!confirm("Retirer cette carte de Mes cartes ?")) return;
+    list = list.filter(x => x.id !== id);
+  } else {
+    const ex = list.find(x => x.id === id);
+    const src = ex || all.find(x => x.id === id) || load().find(x => x.id === id) || (cs && cs.base.id === id ? cs.base : null);
+    if (!src) return;
+    const q = prompt("Combien d’exemplaires as-tu ?", ex ? ex.qty : "1");
+    if (q === null) return;
+    const qty = parseInt(q, 10);
+    if (!(qty > 0)) return;
+    const bp = prompt("Prix d’achat par carte en € (laisse vide si tu ne sais pas)", ex && ex.buy ? String(ex.buy).replace(".", ",") : "");
+    if (bp === null) return;
+    const buy = parseFloat(bp.replace(",", "."));
+    if (ex){ ex.qty = qty; ex.buy = buy > 0 ? buy : null; }
+    else {
+      const m = Object.assign({}, src, {qty:qty, buy:buy > 0 ? buy : null, added:today, hist:[]});
+      delete m.target;
+      snap(m);
+      list.push(m);
+    }
+  }
+  saveM(list);
+  refreshView();
+}
+
+function rowMine(c){
+  const v = verdict(c);
+  const val = c.trend != null ? c.trend * c.qty : null;
+  const gp = (c.buy > 0 && c.trend != null) ? c.trend / c.buy - 1 : null;
+  const pts = cmPts(c);
+  const l1 = val != null && c.qty > 1 ? "Valeur : " + eur(val) : "";
+  const l2 = gp != null ? "achat " + eur(c.buy) + " (" + sgnp(gp) + ")" : "";
+  return `<div class="c" data-id="${esc(c.id)}">${imgTag(c)}
+    <div class="b"><h2>${esc(c.name)} <span class="qty">×${c.qty}</span></h2>
+      <div class="s">${esc(c.set)} · n° ${esc(c.number)}</div>
+      ${c.trend == null ? '<div class="p none">Pas de prix</div>' : `<div class="p">${eur(c.trend)}</div>`}
+      ${l1 || l2 ? `<div class="d">${esc([l1, l2].filter(Boolean).join(" · "))}</div>` : ""}
+      <span class="badge k-${v.k}">${esc(v.txt)}</span>
+      ${pts.length >= 2 ? chart(pts, 120, 34) : ""}
+      <div class="r"><button data-id="${esc(c.id)}" data-m="edit">Modifier</button><button data-id="${esc(c.id)}" data-m="del">Retirer</button></div>
+    </div></div>`;
+}
+
+function renderMine(list){
+  if (!list.length){ out.innerHTML = msg("Aucune carte ici. Ouvre une carte et appuie sur « J’ai la carte »."); return; }
+  const rows = list.slice().sort((a, b) => ((b.trend || 0) * b.qty) - ((a.trend || 0) * a.qty));
+  let val = 0, inv = 0, invVal = 0, signals = 0, nb = 0;
+  rows.forEach(c => {
+    nb += c.qty;
+    if (c.trend != null){ val += c.trend * c.qty; if (c.buy > 0){ inv += c.buy * c.qty; invVal += c.trend * c.qty; } }
+    const k = verdict(c).k;
+    if (k === "sell" || k === "warn") signals++;
+  });
+  const g = inv > 0 ? invVal - inv : null;
+  out.innerHTML = `<div class="sec"><h3>Ma collection</h3>${grid([
+      kv("Cartes", nb), kv("Valeur estimée", eur(val)),
+      kv("Investi (cartes avec prix d’achat)", inv > 0 ? eur(inv) : null),
+      kv("Gain ou perte", g != null ? sgn(g) + " (" + sgnp(invVal / inv - 1) + ")" : null),
+      kv("À vendre bientôt ?", signals ? signals + " carte" + (signals > 1 ? "s" : "") : null)])}
+      <div class="note">Valeur au prix tendance Cardmarket, avant frais de vente. Les indications « vendre » ou « garder » reposent sur les moyennes 7 et 30 jours : ce sont des repères simples, pas des conseils financiers.</div></div>
+    <div id="list">${rows.map(rowMine).join("")}</div>`;
+}
+
+let mineAt = 0;
+async function showMine(){
+  const list = loadM();
+  renderMine(list);
+  if (!list.length || Date.now() - mineAt < 600000) return;
+  mineAt = Date.now();
+  const fresh = {};
+  await pool(list, 6, async c => {
+    try { fresh[c.id] = slim(await detail(c.id), c.name); } catch(e){}
+  });
+  const cur = loadM().map(c => { if (fresh[c.id]){ mergeFresh(c, fresh[c.id]); snap(c); } return c; });
+  saveM(cur);
+  if (tab === 3) renderMine(cur);
 }
 
 function doAct(id, act){
@@ -290,13 +480,15 @@ function doAct(id, act){
     if (act === "add" && !list.find(x => x.id === id)) list.push(src);
   }
   save(list);
-  if (tab === 2) renderWatch(list); else if (all.length) view();
+  refreshView();
 }
 
 out.addEventListener("click", e => {
   if (e.target.id === "more"){ shown += STEP; view(); return; }
   const b = e.target.closest("button[data-act]");
   if (b){ doAct(b.dataset.id, b.dataset.act); return; }
+  const mb = e.target.closest("button[data-m]");
+  if (mb){ doMine(mb.dataset.id, mb.dataset.m); return; }
   const card = e.target.closest(".c");
   if (card && !e.target.closest("a")) openCard(card.dataset.id);
 });
@@ -344,25 +536,48 @@ function renderOv(){
   if (!cs) return;
   const b = cs.base, t = cs.fr || cs.en || {}, p = cs.en || cs.fr || {};
   const w = load().find(x => x.id === b.id);
+  const m = loadM().find(x => x.id === b.id);
   const set = t.set || {};
   const cc = set.cardCount || {};
   const num = (t.localId || b.number) + (cc.official ? "/" + cc.official : "");
   const rar = t.rarity || b.rarity;
-  const img = t.image ? t.image + "/high.webp" : b.img;
+  const hs = imgSrcs({ib:t.image || b.ib, img:b.img, setId:b.setId, number:b.number}, "high");
   const cm = (p.pricing && p.pricing.cardmarket) || {};
   const tp = (p.pricing && p.pricing.tcgplayer) || {};
 
-  let h = `<div class="hero">${img ? `<a href="${esc(img)}" target="_blank" rel="noopener"><img src="${esc(img)}" alt="${esc(b.name)}"></a>` : ""}
+  let h = `<div class="hero"><a href="${esc(hs[0] || PH)}" target="_blank" rel="noopener"><img src="${esc(hs[0] || PH)}" data-alt="${esc(hs.slice(1).join("|"))}" alt="${esc(b.name)}"></a>
     <div class="p${b.trend == null ? " none" : ""}">${b.trend == null ? "Pas de prix" : eur(b.trend)}</div>
     <div class="d">${esc(set.name || b.set)} · n° ${esc(num)}${rar ? " · " + esc(rar) : ""}</div></div>
     <div class="r acts">${links(b)}
       <a href="https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(b.name)}" target="_blank" rel="noopener">Cardmarket</a>
-      <button data-id="${esc(b.id)}" data-act="${w ? "set" : "add"}">${w ? "Changer le seuil" : "Suivre"}</button>
-      ${w ? `<button data-id="${esc(b.id)}" data-act="del">Retirer</button>` : ""}</div>`;
+      <button data-id="${esc(b.id)}" data-act="${w ? "set" : "add"}">${w ? "Changer le seuil" : "Surveiller"}</button>
+      ${w ? `<button data-id="${esc(b.id)}" data-act="del">Retirer</button>` : ""}
+      <button data-id="${esc(b.id)}" data-m="${m ? "edit" : "add"}">${m ? "Modifier ma carte" : "J’ai la carte"}</button>
+      ${m ? `<button data-id="${esc(b.id)}" data-m="del">Retirer de mes cartes</button>` : ""}</div>`;
 
   if (cs.loading) h += msg("Chargement des détails…");
   else if (!cs.fr && !cs.en) h += msg("Détails indisponibles pour le moment. Ferme la fiche et rouvre-la dans un instant.");
   else {
+    const cv = cmVals(cm);
+    if (m){
+      const src = cv.trend != null ? Object.assign({}, m, cv) : m;
+      const v = verdict(src), tn = src.trend;
+      const val = tn != null ? tn * m.qty : null;
+      const gain = (m.buy > 0 && tn != null) ? (tn - m.buy) * m.qty : null;
+      h += sec("Ma carte", `<span class="badge k-${v.k}">${esc(v.txt)}</span><div class="why">${esc(v.why)}</div>` + grid([
+        kv("Exemplaires", m.qty), kv("Prix d’achat (par carte)", m.buy > 0 ? eur(m.buy) : null),
+        kv("Valeur estimée", val != null ? eur(val) : null),
+        kv("Gain ou perte", gain != null ? sgn(gain) + " (" + sgnp(tn / m.buy - 1) + ")" : null),
+        kv("Ajoutée le", m.added ? dateFr(m.added) : null)]));
+    }
+    const pts = cmPts(cv);
+    if (pts.length >= 2) h += sec("Évolution du prix", chart(pts, 320, 110) + '<div class="note">Moyennes Cardmarket sur 30 jours, 7 jours et 1 jour, puis prix tendance actuel.</div>');
+    const hist = (m && m.hist || []).filter(q => q[1] > 0);
+    if (hist.length >= 2){
+      const ys = hist.map(q => q[1]);
+      h += sec("Mon historique", chart(hist.map(q => ({x:Date.parse(q[0]) / 86400000, y:q[1]})), 320, 110) + grid([kv("Plus bas", eur(Math.min(...ys))), kv("Plus haut", eur(Math.max(...ys)))]) + '<div class="note">Un point par jour où tu as ouvert l’appli depuis l’ajout de la carte.</div>');
+    }
+    h += sec("Ventes réelles", `<div class="r">${soldLinks(b)}</div><div class="note">Aucune source gratuite ne donne la liste des dernières ventes carte par carte. Ces liens ouvrent les ventes terminées sur eBay (les plus récentes d’abord) et l’historique PriceCharting.</div>`);
     // Prix Cardmarket (EUR)
     const cmRows = [kv("Tendance", e2(cm.trend)), kv("Moyenne", e2(cm.avg)), kv("Le moins cher", e2(cm.low)),
       kv("Moyenne sur 1 jour", e2(cm.avg1)), kv("Moyenne sur 7 jours", e2(cm.avg7)), kv("Moyenne sur 30 jours", e2(cm.avg30)),
@@ -370,7 +585,7 @@ function renderOv(){
       kv("Tendance (holo)", e2(cm["trend-holo"])), kv("Moyenne (holo)", e2(cm["avg-holo"])), kv("Le moins cher (holo)", e2(cm["low-holo"])),
       kv("Moyenne 7 jours (holo)", e2(cm["avg7-holo"])), kv("Moyenne 30 jours (holo)", e2(cm["avg30-holo"])),
       kv("Mis à jour le", cm.updated ? dateFr(cm.updated) : null)];
-    h += sec("Prix Cardmarket (€)", grid(cmRows) || '<div class="d">Pas de prix Cardmarket pour cette carte.</div>');
+    h += sec("Prix Cardmarket (€)", grid(cmRows) ? grid(cmRows) + '<div class="note">Les moyennes sur 1, 7 et 30 jours reposent sur les ventes de Cardmarket. La liste des ventes une par une n’est pas disponible dans les données gratuites.</div>' : '<div class="d">Pas de prix Cardmarket pour cette carte.</div>');
 
     // Prix TCGplayer (USD)
     const tpHtml = Object.keys(tp).filter(k => tp[k] && typeof tp[k] === "object").map(k => {
@@ -418,7 +633,9 @@ function renderOv(){
 $("ovl").addEventListener("click", e => {
   if (e.target.closest("[data-close]")){ closeOv(); return; }
   const b = e.target.closest("button[data-act]");
-  if (b){ doAct(b.dataset.id, b.dataset.act); renderOv(); }
+  if (b){ doAct(b.dataset.id, b.dataset.act); renderOv(); return; }
+  const mb = e.target.closest("button[data-m]");
+  if (mb){ doMine(mb.dataset.id, mb.dataset.m); renderOv(); }
 });
 
 $("f").addEventListener("submit", e => {
@@ -433,11 +650,11 @@ $("f").addEventListener("submit", e => {
 }));
 
 function setTab(){
-  $("t1").classList.toggle("on", tab === 1);
-  $("t2").classList.toggle("on", tab === 2);
+  [1, 2, 3].forEach(n => $("t" + n).classList.toggle("on", tab === n));
 }
 $("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg("Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée."); };
 $("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
+$("t3").onclick = () => { tab = 3; setTab(); showMine(); };
 </script>
 </body>
 </html>
