@@ -121,6 +121,7 @@ body.lock{overflow:hidden}
     </div>
     <div class="note" style="margin-top:14px"><b>Clé PokeTrace</b> (pour les ventes eBay détaillées). Elle reste enregistrée uniquement sur cet iPhone.</div>
     <div class="kf"><input id="pkkey" type="password" placeholder="Colle la clé ici" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="pksave" type="button" class="alt">Enregistrer</button></div>
+    <div class="bk"><button id="pktest" type="button">Tester la clé</button></div>
     <div class="note" id="pkstate"></div>
     <div class="note" style="margin-top:14px"><b>Sauvegarde de mes données</b> (Mes cartes, À surveiller). À faire de temps en temps, et avant de supprimer l’icône de l’appli.</div>
     <div class="bk">
@@ -151,8 +152,13 @@ const pos = v => (typeof v === "number" && v > 0) ? v : null;
 const sgn = n => (n > 0 ? "+" : n < 0 ? "−" : "") + eur(Math.abs(n));
 const sgnp = p => (p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p * 100).toFixed(1).replace(".", ",") + " %";
 
-// Image de remplacement (si aucune image n’existe pour la carte)
-const PH = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 117"><rect x="2" y="2" width="80" height="113" rx="8" fill="#2a3555" stroke="#667089" stroke-width="2"/><text x="42" y="56" font-family="sans-serif" font-size="9" fill="#98a2bd" text-anchor="middle">Image non</text><text x="42" y="68" font-family="sans-serif" font-size="9" fill="#98a2bd" text-anchor="middle">disponible</text></svg>');
+// Image de remplacement (si la carte n’a aucune image dans la base) : nom + numéro + « Pas d’image »
+function phUri(n){
+  const parts = String(n || "").split("|");
+  const x = t => String(t || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const nm = x(parts[0].length > 16 ? parts[0].slice(0, 15) + "…" : parts[0]);
+  return "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 84 117"><rect x="2" y="2" width="80" height="113" rx="8" fill="#2a3555" stroke="#98a2bd" stroke-width="1.5" stroke-dasharray="4 3"/><text x="42" y="50" font-family="sans-serif" font-size="9" font-weight="bold" fill="#eef1f7" text-anchor="middle">' + nm + '</text><text x="42" y="63" font-family="sans-serif" font-size="8" fill="#98a2bd" text-anchor="middle">n° ' + x(parts[1] || "?") + '</text><text x="42" y="88" font-family="sans-serif" font-size="8" fill="#98a2bd" text-anchor="middle">Pas d’image</text></svg>');
+}
 // Liste des adresses d’image à essayer, dans l’ordre
 function imgSrcs(c, q){
   const base = c.ib || (c.img || "").replace(/\/(low|high)\.(webp|png|jpg)$/, "");
@@ -162,12 +168,11 @@ function imgSrcs(c, q){
     const sw = base.includes("/en/") ? base.replace("/en/", "/fr/") : base.replace("/fr/", "/en/");
     if (sw !== base) out.push(`${sw}/${q}.webp`);
   }
-  if (c.setId && c.number) out.push(`https://images.pokemontcg.io/${c.setId}/${c.number}${q === "high" ? "_hires" : ""}.png`);
   return out;
 }
 function imgTag(c){
   const s = imgSrcs(c, "low");
-  return `<img src="${esc(s[0] || PH)}" data-alt="${esc(s.slice(1).join("|"))}" alt="" loading="lazy">`;
+  return `<img src="${esc(s[0] || phUri(c.name + "|" + c.number))}" data-alt="${esc(s.slice(1).join("|"))}" data-n="${esc(c.name + "|" + c.number)}" alt="" loading="lazy">`;
 }
 // Si une image ne charge pas, on essaie la suivante, puis l’image de remplacement
 document.addEventListener("error", e => {
@@ -175,7 +180,7 @@ document.addEventListener("error", e => {
   if (!im || im.tagName !== "IMG" || !im.hasAttribute("data-alt") || im.dataset.ph) return;
   const q = (im.dataset.alt || "").split("|").filter(Boolean);
   if (q.length){ im.src = q.shift(); im.dataset.alt = q.join("|"); }
-  else { im.dataset.ph = "1"; im.src = PH; }
+  else { im.dataset.ph = "1"; im.src = phUri(im.dataset.n); }
 }, true);
 
 // Prix Cardmarket : valeurs normales, ou « holo » si la carte n’existe qu’en holo
@@ -542,15 +547,28 @@ function pkShowState(){
 }
 $("pksave").addEventListener("click", () => {
   const k = $("pkkey").value.trim();
+  try { localStorage.removeItem("pknolist"); } catch(e){}
   if (!k){ try { localStorage.removeItem("pkkey"); } catch(e){} idbSet("pkkey", ""); }
   else { try { localStorage.setItem("pkkey", k); } catch(e){} idbSet("pkkey", k); }
   pkShowState();
 });
 pkShowState();
 
+let pkLast = 0;
+async function pkWait(){
+  const w = pkLast + 2000 - Date.now();
+  if (w > 0) await new Promise(r => setTimeout(r, w));
+  pkLast = Date.now();
+}
+function rlInfo(r){
+  const o = [];
+  try { r.headers.forEach((v, k) => { if (/ratelimit|rate-limit|retry-after|quota/i.test(k)) o.push(k + ": " + v); }); } catch(e){}
+  return o.join(" ; ");
+}
 async function pkGet(path){
   const key = pkKey();
   if (!key) throw new Error("nokey");
+  await pkWait();
   const r = await Promise.race([
     fetch(PK + path, {headers:{"X-API-Key": key}}),
     new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 20000))
@@ -560,29 +578,59 @@ async function pkGet(path){
     try { const j = await r.json(); m = (j && (j.message || (j.error && (j.error.message || j.error)) || j.detail)) || ""; } catch(e){}
     const err = new Error(typeof m === "string" ? m : JSON.stringify(m));
     err.status = r.status;
+    err.retry = (r.headers && r.headers.get("retry-after")) || "";
+    err.rl = rlInfo(r);
     throw err;
   }
   return r.json();
 }
 function pkErr(e){
   const st = e.status, m = (e.message && e.message !== "timeout") ? " (" + String(e.message).slice(0, 140) + ")" : "";
-  if (e.message === "timeout") return "PokeTrace met trop de temps à répondre. Rouvre la carte dans un instant.";
+  if (e.message === "timeout") return "PokeTrace met trop de temps à répondre. Réessaie dans un instant.";
   if (st === 401) return "Clé refusée par PokeTrace. Vérifie-la dans « Filtres et tri »." + m;
-  if (st === 429) return "Trop de requêtes envoyées à PokeTrace : attends une minute puis rouvre la carte." + m;
+  if (st === 429) return "Limite de requêtes PokeTrace atteinte" + (/^\d+$/.test(e.retry) ? " : réessaie dans " + e.retry + " s." : ". Attends un moment puis réessaie : ta formule a peut-être une limite basse ou journalière.") + m + (e.rl ? " [" + e.rl + "]" : "");
   if (st === 402 || st === 403) return "Ta formule PokeTrace ne donne pas accès à cette donnée." + m;
   return "PokeTrace a répondu avec une erreur" + (st ? " " + st : "") + "." + m;
 }
 
-const skc = {};
+$("pktest").addEventListener("click", async () => {
+  if (!pkKey()){ $("pkstate").textContent = "Enregistre d’abord une clé."; return; }
+  $("pkstate").textContent = "Test en cours…";
+  try {
+    await pkWait();
+    const r = await fetch(PK + "/cards?limit=1&market=US", {headers:{"X-API-Key": pkKey()}});
+    let m = "";
+    if (!r.ok){ try { const j = await r.json(); m = j.message || (j.error && (j.error.message || j.error)) || ""; } catch(e){} }
+    const rl = rlInfo(r);
+    $("pkstate").textContent = (r.ok ? "Clé valide : PokeTrace répond." : "PokeTrace répond : erreur " + r.status + (m ? " (" + (typeof m === "string" ? m : JSON.stringify(m)).slice(0, 160) + ")" : "") + ".") + (rl ? " " + rl : "");
+  } catch(e){ $("pkstate").textContent = "PokeTrace est injoignable depuis cet appareil."; }
+});
+
 const pkMap = () => { try { return JSON.parse(localStorage.getItem("pkmap") || "{}"); } catch(e){ return {}; } };
 const pkMapSet = (id, v) => { try { const m = pkMap(); if (v) m[id] = v; else delete m[id]; localStorage.setItem("pkmap", JSON.stringify(m)); } catch(e){} };
+const pkc = () => { try { return JSON.parse(localStorage.getItem("pkc") || "{}"); } catch(e){ return {}; } };
+function pkcSet(id, h){
+  try {
+    const m = pkc(); m[id] = {d:today, h};
+    const ks = Object.keys(m);
+    if (ks.length > 60) ks.slice(0, ks.length - 60).forEach(k => delete m[k]);
+    localStorage.setItem("pkc", JSON.stringify(m));
+  } catch(e){}
+}
 const norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const numNorm = t => { const m = String(t || "").split("/")[0].trim().toLowerCase(); return /^\d+$/.test(m) ? String(parseInt(m, 10)) : m; };
-const slug = t => String(t || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const TIERS = {NEAR_MINT:"Proche du neuf", LIGHTLY_PLAYED:"Légèrement jouée", MODERATELY_PLAYED:"Moyennement jouée", HEAVILY_PLAYED:"Très jouée", DAMAGED:"Abîmée"};
+const soldBtn = () => '<button type="button" data-pk="load">Charger les ventes eBay</button><div class="note">Utilise 1 à 2 requêtes PokeTrace, uniquement quand tu appuies.</div>';
 
+// Contenu initial de la section : résultat du jour déjà en mémoire, ou bouton
+function soldInit(b){
+  if (cs.soldHtml) return cs.soldHtml;
+  const c = pkc()[b.id];
+  if (c && c.d === today){ cs.soldHtml = c.h; return c.h; }
+  return pkKey() ? soldBtn() : '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay.</div>';
+}
 function setSold(id, html, keep){
-  if (keep) skc[id] = html;
+  if (keep) pkcSet(id, html);
   if (cs && cs.base.id === id){
     cs.soldHtml = html;
     const el = document.getElementById("soldbox");
@@ -590,31 +638,13 @@ function setSold(id, html, keep){
   }
 }
 
-// Trouve la carte chez PokeTrace : numéro + extension, puis on retient l’identifiant
-async function findPk(b, enName){
-  const known = pkMap()[b.id];
-  if (known) return known;
-  const want = numNorm(b.number), ws = norm(b.set), tot = String(b.total || "");
-  const pick = list => {
-    const c = list.filter(x => numNorm(x.cardNumber) === want);
-    return c.find(x => { const n = norm(x.set && x.set.name); return n && (n === ws || n.includes(ws) || ws.includes(n)); })
-        || c.find(x => tot && String(x.cardNumber || "").split("/")[1] && parseInt(String(x.cardNumber).split("/")[1], 10) === parseInt(tot, 10))
-        || (c.length === 1 ? c[0] : null);
-  };
-  try {
-    const r = await pkGet(`/cards?search=${encodeURIComponent(enName)}&set=${encodeURIComponent(slug(b.set))}&market=US&limit=50`);
-    const h = pick(r.data || []);
-    if (h) return h.id;
-  } catch(e){ if (e.status === 401 || e.status === 429 || e.message === "timeout") throw e; }
-  let cur = "";
-  for (let i = 0; i < 3; i++){
-    const r = await pkGet(`/cards?search=${encodeURIComponent(enName)}&market=US&limit=50${cur ? "&cursor=" + encodeURIComponent(cur) : ""}`);
-    const h = pick(r.data || []);
-    if (h) return h.id;
-    if (!(r.pagination && r.pagination.hasMore && r.pagination.nextCursor)) break;
-    cur = r.pagination.nextCursor;
-  }
-  return null;
+// Choisit la bonne carte dans une liste PokeTrace : numéro, puis extension, puis total
+function pickPk(b, list){
+  const want = numNorm(b.number), ws = norm(b.set), tot = parseInt(b.total, 10);
+  const c = list.filter(x => numNorm(x.cardNumber) === want);
+  return c.find(x => { const n = norm(x.set && x.set.name); return n && ws && (n === ws || n.includes(ws) || ws.includes(n)); })
+      || c.find(x => tot && parseInt(String(x.cardNumber || "").split("/")[1], 10) === tot)
+      || (c.length === 1 ? c[0] : null);
 }
 
 function ebayStat(card){
@@ -629,44 +659,51 @@ function ebayStat(card){
 }
 const usd2 = n => (typeof n === "number" && n > 0) ? "$" + n.toFixed(2) : null;
 
-async function loadSold(b, enName){
+async function loadSold(b, enName, cursor){
   const id = b.id;
-  if (skc[id]){ setSold(id, skc[id]); return; }
-  if (!pkKey()){ setSold(id, '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay détaillées.</div>'); return; }
+  if (!pkKey()){ setSold(id, '<div class="note">Ajoute ta clé PokeTrace dans « Filtres et tri » pour voir les ventes eBay.</div>'); return; }
+  setSold(id, '<div class="note">Recherche chez PokeTrace…</div>');
   try {
-    const pid = await findPk(b, enName);
-    if (!pid){
-      setSold(id, `<div class="note">Carte introuvable chez PokeTrace (cherché : ${esc(enName)} n° ${esc(b.number)}). Les cartes très récentes ou européennes n’y sont pas toutes.</div>`);
-      return;
+    let card = null, pid = pkMap()[id];
+    if (pid){
+      try { card = (await pkGet(`/cards/${encodeURIComponent(pid)}`)).data || null; }
+      catch(e){ if (e.status === 404){ pkMapSet(id, null); pid = null; } else throw e; }
     }
-    pkMapSet(id, pid);
-    let card;
-    try { card = (await pkGet(`/cards/${encodeURIComponent(pid)}`)).data || {}; }
-    catch(e){ if (e.status === 404) pkMapSet(id, null); throw e; }
+    if (!card){
+      const r = await pkGet(`/cards?search=${encodeURIComponent(enName)}&market=US&limit=50${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`);
+      card = pickPk(b, r.data || []);
+      if (!card){
+        const next = (r.pagination && r.pagination.hasMore && r.pagination.nextCursor) || "";
+        if (cs && cs.base.id === id) cs.pkCursor = next;
+        setSold(id, `<div class="note">Carte introuvable chez PokeTrace (cherché : ${esc(enName)} n° ${esc(b.number)}).${next ? " Elle est peut-être plus loin dans la liste." : " Les cartes très récentes ou européennes n’y sont pas toutes."}</div>` + (next ? '<button type="button" data-pk="more">Chercher plus loin</button>' : ""));
+        return;
+      }
+      pkMapSet(id, card.id);
+    }
     const st = ebayStat(card);
     let html = st ? grid([kv("État", TIERS[st.tier] || st.tier), kv("Prix moyen eBay", usd2(st.e.avg)), kv("Moyenne 7 jours", usd2(st.e.avg7d)),
                           kv("Le plus bas", usd2(st.e.low)), kv("Le plus haut", usd2(st.e.high)), kv("Nombre de ventes", st.e.saleCount)])
                   : '<div class="note">Pas de prix de vente eBay pour cette carte chez PokeTrace.</div>';
     let ok = true, noList = false;
-    try { noList = localStorage.getItem("pknolist") === today; } catch(e){}
+    try { noList = localStorage.getItem("pknolist") === "1"; } catch(e){}
     if (noList) html += '<div class="note">Les ventes détaillées demandent une formule PokeTrace Scale ou Business.</div>';
     else {
       try {
-        const l = await pkGet(`/cards/${encodeURIComponent(pid)}/listings?limit=10&sort=sold_at_desc`);
+        const l = await pkGet(`/cards/${encodeURIComponent(card.id)}/listings?limit=10&sort=sold_at_desc`);
         const items = (l.data || []).filter(x => x.listingType === "sold");
         html += items.length
           ? `<div class="sold" style="margin-top:10px">${items.map(x => `<a href="${esc(x.listingUrl)}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>${usd2(Number(x.price)) || ""}</b></a>`).join("")}</div>`
           : '<div class="note">Aucune vente détaillée trouvée.</div>';
       } catch(e){
         if (e.status === 402 || e.status === 403){
-          try { localStorage.setItem("pknolist", today); } catch(e2){}
+          try { localStorage.setItem("pknolist", "1"); } catch(e2){}
           html += '<div class="note">Les ventes détaillées demandent une formule PokeTrace Scale ou Business.</div>';
         } else { ok = false; html += `<div class="note">${esc(pkErr(e))}</div>`; }
       }
     }
     setSold(id, html, ok);
   } catch(e){
-    setSold(id, `<div class="note">${esc(pkErr(e))}</div>`);
+    setSold(id, `<div class="note">${esc(pkErr(e))}</div><button type="button" data-pk="load">Réessayer</button>`);
   }
 }
 
@@ -722,7 +759,7 @@ function renderOv(){
   const cm = (p.pricing && p.pricing.cardmarket) || {};
   const tp = (p.pricing && p.pricing.tcgplayer) || {};
 
-  let h = `<div class="hero"><a href="${esc(hs[0] || PH)}" target="_blank" rel="noopener"><img src="${esc(hs[0] || PH)}" data-alt="${esc(hs.slice(1).join("|"))}" alt="${esc(b.name)}"></a>
+  let h = `<div class="hero"><a href="${esc(hs[0] || "#")}" target="_blank" rel="noopener"><img src="${esc(hs[0] || phUri(b.name + "|" + b.number))}" data-alt="${esc(hs.slice(1).join("|"))}" data-n="${esc(b.name + "|" + b.number)}" alt="${esc(b.name)}"></a>
     <div class="p${b.trend == null ? " none" : ""}">${b.trend == null ? "Pas de prix" : eur(b.trend)}</div>
     <div class="d">${esc(set.name || b.set)} · n° ${esc(num)}${rar ? " · " + esc(rar) : ""}</div></div>
     <div class="r acts">${links(b)}
@@ -754,7 +791,7 @@ function renderOv(){
       const ys = hist.map(q => q[1]);
       h += sec("Mon historique", chart(hist.map((q, i) => ({x:Date.parse(q[0]) / 86400000, y:q[1], l:(i === 0 || i === hist.length - 1) ? new Date(q[0]).toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"}) : ""})), 320, 150) + grid([kv("Plus bas", eur(Math.min(...ys))), kv("Plus haut", eur(Math.max(...ys)))]) + '<div class="note">Un point par jour où tu as ouvert l’appli depuis l’ajout de la carte.</div>');
     }
-    h += sec("Ventes récentes (eBay)", `<div id="soldbox">${cs.soldHtml || '<div class="note">Chargement…</div>'}</div>`);
+    h += sec("Ventes récentes (eBay)", `<div id="soldbox">${soldInit(b)}</div>`);
     h += sec("Ventes terminées (liens)", `<div class="r">${soldLinks(b)}</div>`);
     // Prix Cardmarket (EUR)
     const cmRows = [kv("Tendance", e2(cm.trend)), kv("Moyenne", e2(cm.avg)), kv("Le moins cher", e2(cm.low)),
@@ -806,11 +843,12 @@ function renderOv(){
   const y = $("ovl").scrollTop;
   $("ovl").innerHTML = `<div class="ovbar"><b>${esc(b.name)}</b><button type="button" data-close="1">Fermer</button></div><div class="ovb">${h}</div>`;
   $("ovl").scrollTop = y;
-  if (cs && !cs.loading && !cs.soldDone){ cs.soldDone = true; loadSold(b, (cs.en || cs.fr || {}).name || b.name); }
 }
 
 $("ovl").addEventListener("click", e => {
   if (e.target.closest("[data-close]")){ closeOv(); return; }
+  const pk = e.target.closest("button[data-pk]");
+  if (pk && cs){ loadSold(cs.base, (cs.en || cs.fr || {}).name || cs.base.name, pk.dataset.pk === "more" ? cs.pkCursor : ""); return; }
   const b = e.target.closest("button[data-act]");
   if (b){ doAct(b.dataset.id, b.dataset.act); renderOv(); return; }
   const mb = e.target.closest("button[data-m]");
