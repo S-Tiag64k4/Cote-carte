@@ -12,35 +12,46 @@
 @media (prefers-color-scheme:dark){:root{--bg:#0f1526;--card:#18213a;--ink:#eef1f7;--mute:#98a2bd;--line:#2a3555;--blue:#7b9bff;--green:#47c995;--alert:#ff9461}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,system-ui,"Segoe UI",sans-serif}
-body{padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+body{padding:env(safe-area-inset-top,0) 0 0}
 header{position:sticky;top:0;background:var(--bg);padding:12px 14px 8px;z-index:5;border-bottom:1px solid var(--line)}
 h1{font-size:22px;margin:0 0 10px;letter-spacing:-.3px}
 form{display:flex;gap:8px}
-input{flex:1;min-width:0;font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+input,select{font:inherit;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+#q{flex:1}
 button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--blue);color:#fff;font-weight:600}
-button.alt{background:transparent;color:var(--blue);border:1px solid var(--line)}
 nav{display:flex;gap:6px;margin-top:10px}
 nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line)}
 nav button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-main{padding:12px 14px 40px;display:grid;gap:12px}
+main{padding:12px 14px calc(110px + env(safe-area-inset-bottom,0px));display:grid;gap:12px}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+summary{font-weight:600;color:var(--blue)}
+.fl{display:grid;gap:10px;margin-top:10px}
+.fl label{display:grid;gap:3px;font-size:13px;color:var(--mute)}
+.fl select{width:100%}
+.fl .chk{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--ink)}
+.chk input{width:22px;height:22px;flex:none;padding:0}
 .msg{color:var(--mute);text-align:center;padding:30px 10px}
+.count{color:var(--mute);font-size:13px;margin-bottom:10px}
+#list{display:grid;gap:12px}
 .c{display:flex;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px}
 .c img{width:84px;height:117px;object-fit:contain;border-radius:6px;flex:none;background:var(--bg)}
 .c .b{flex:1;min-width:0}
 .c h2{font-size:16px;margin:0}
 .c .s{color:var(--mute);font-size:13px;margin-bottom:6px}
 .p{font-size:22px;font-weight:700;color:var(--green)}
+.p.none{font-size:15px;color:var(--mute);font-weight:500}
 .d{font-size:13px;color:var(--mute)}
 .r{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .r a,.r button{font-size:13px;padding:7px 10px;border-radius:8px;text-decoration:none;background:transparent;color:var(--blue);border:1px solid var(--line);font-weight:600}
 .flag{display:inline-block;background:var(--alert);color:#fff;font-size:12px;font-weight:700;border-radius:6px;padding:2px 7px;margin-left:6px}
+#more{width:100%;padding:13px;margin-top:12px}
 </style>
 </head>
 <body>
 <header>
   <h1>Cote Cartes</h1>
   <form id="f">
-    <input id="q" placeholder="Nom d’une carte (ex : Dracaufeu)" enterkeyhint="search" autocomplete="off">
+    <input id="q" placeholder="Pokémon, en français ou anglais" enterkeyhint="search" autocomplete="off" autocapitalize="off">
     <button>Chercher</button>
   </form>
   <nav>
@@ -48,40 +59,98 @@ main{padding:12px 14px 40px;display:grid;gap:12px}
     <button id="t2" type="button">Suivi</button>
   </nav>
 </header>
-<main id="out"><div class="msg">Cherche une carte pour voir sa cote Cardmarket.</div></main>
+<main>
+  <details id="flt">
+    <summary>Filtres et tri</summary>
+    <div class="fl">
+      <label>Trier par
+        <select id="sort">
+          <option value="pd">Prix, du plus cher au moins cher</option>
+          <option value="pa">Prix, du moins cher au plus cher</option>
+          <option value="nm">Nom, de A à Z</option>
+        </select>
+      </label>
+      <label>Extension
+        <select id="set"><option value="">Toutes les extensions</option></select>
+      </label>
+      <label>Rareté
+        <select id="rar"><option value="">Toutes les raretés</option></select>
+      </label>
+      <label class="chk"><input type="checkbox" id="priced" checked> Masquer les cartes sans prix</label>
+    </div>
+  </details>
+  <div id="out"><div class="msg">Tape le nom d’un Pokémon pour voir toutes ses cartes.</div></div>
+</main>
 
 <script>
-const API = "https://api.pokemontcg.io/v2/cards";
-const out = document.getElementById("out");
-let tab = 1;
+// Données : TCGdex (gratuit, sans clé, noms en français). Prix : Cardmarket, en euros.
+const API = "https://api.tcgdex.net/v2";
+const STEP = 30;
+const $ = id => document.getElementById(id);
+const out = $("out");
+let tab = 1, all = [], shown = STEP, status = "", run = 0;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const eur = n => n == null ? "—" : n.toLocaleString("fr-FR", {style:"currency", currency:"EUR"});
+const msg = t => `<div class="msg">${t}</div>`;
+const pos = v => (typeof v === "number" && v > 0) ? v : null;
 
 function load(){ try { return JSON.parse(localStorage.getItem("suivi") || "[]"); } catch(e){ return []; } }
 function save(l){ try { localStorage.setItem("suivi", JSON.stringify(l)); } catch(e){} }
 
-function links(c){
-  const t = encodeURIComponent(c.name + " " + c.number + " " + c.set);
-  return `<a href="https://www.ebay.fr/sch/i.html?_nkw=${t}&LH_BIN=1&_sop=15" target="_blank" rel="noopener">eBay</a>
-          <a href="https://www.vinted.fr/catalog?search_text=${t}&order=price_low_to_high" target="_blank" rel="noopener">Vinted</a>`;
+// Mémoire des prix : valable pour la journée (Cardmarket met à jour une fois par jour)
+const today = new Date().toISOString().slice(0, 10);
+let pc = {day:today, items:{}};
+try { const s = JSON.parse(localStorage.getItem("pxcache") || "null"); if (s && s.day === today) pc = s; } catch(e){}
+function savePc(){ try { localStorage.setItem("pxcache", JSON.stringify(pc)); } catch(e){ pc.items = {}; } }
+
+// Appel réseau simple, avec délai maximum et nouvel essai (sans AbortController)
+async function getJSON(url, tries, ms){
+  let last;
+  for (let i = 0; i < tries; i++){
+    try {
+      return await Promise.race([
+        fetch(url).then(r => { if (!r.ok) throw new Error("erreur " + r.status); return r.json(); }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("trop lent")), ms))
+      ]);
+    } catch(e){ last = e; }
+  }
+  throw last;
 }
 
-function slim(c){
-  const p = c.cardmarket && c.cardmarket.prices || {};
-  return {id:c.id, name:c.name, number:c.number, set:c.set.name, img:c.images.small,
-          trend:p.trendPrice ?? null, low:p.lowPrice ?? null, avg30:p.avg30 ?? null,
-          date:c.cardmarket ? c.cardmarket.updatedAt : null};
+function slim(d, name){
+  const cm = (d.pricing && d.pricing.cardmarket) || {};
+  const set = d.set || {};
+  return {id:d.id, name:name || d.name, number:d.localId, rarity:d.rarity || "",
+          set:set.name || "?", setId:set.id || "?", total:set.cardCount && set.cardCount.official,
+          img:d.image ? d.image + "/low.webp" : "",
+          trend:pos(cm.trend) ?? pos(cm["trend-holo"]) ?? pos(cm.avg) ?? pos(cm["avg-holo"]),
+          low:pos(cm.low) ?? pos(cm["low-holo"]),
+          avg30:pos(cm.avg30) ?? pos(cm["avg30-holo"])};
+}
+
+async function detail(id){
+  try { return await getJSON(`${API}/en/cards/${encodeURIComponent(id)}`, 2, 20000); }
+  catch(e){ return await getJSON(`${API}/fr/cards/${encodeURIComponent(id)}`, 2, 20000); }
+}
+
+function links(c){
+  const num = c.total ? c.number + "/" + c.total : c.number;
+  const t = encodeURIComponent(c.name + " " + num + " pokemon");
+  return `<a href="https://www.ebay.fr/sch/i.html?_nkw=${t}&LH_BIN=1&_sop=15" target="_blank" rel="noopener">eBay</a>
+          <a href="https://www.vinted.fr/catalog?search_text=${t}&order=price_low_to_high" target="_blank" rel="noopener">Vinted</a>`;
 }
 
 function row(c, followed){
   const w = load().find(x => x.id === c.id);
   const hit = w && w.target != null && c.trend != null && c.trend <= w.target;
+  const price = c.trend == null
+    ? '<div class="p none">Pas de prix</div>'
+    : `<div class="p">${eur(c.trend)}</div><div class="d">le moins cher ${eur(c.low)} · moyenne 30 j ${eur(c.avg30)}</div>`;
   return `<div class="c"><img src="${esc(c.img)}" alt="" loading="lazy">
     <div class="b"><h2>${esc(c.name)}${hit ? '<span class="flag">Sous ton seuil</span>' : ""}</h2>
-      <div class="s">${esc(c.set)} · n° ${esc(c.number)}</div>
-      <div class="p">${eur(c.trend)}</div>
-      <div class="d">le moins cher ${eur(c.low)} · moyenne 30 j ${eur(c.avg30)}</div>
+      <div class="s">${esc(c.set)} · n° ${esc(c.number)}${c.rarity ? " · " + esc(c.rarity) : ""}</div>
+      ${price}
       ${w && w.target != null ? `<div class="d">Seuil : ${eur(w.target)}</div>` : ""}
       <div class="r">${links(c)}
         <button data-id="${esc(c.id)}" data-act="${followed ? "set" : "add"}">${followed ? "Changer le seuil" : "Suivre"}</button>
@@ -89,46 +158,116 @@ function row(c, followed){
       </div></div></div>`;
 }
 
-let results = [];
+async function pool(items, n, fn){
+  let i = 0;
+  await Promise.all(Array.from({length:n}, async () => { while (i < items.length){ const k = i++; await fn(items[k]); } }));
+}
 
-async function search(q){
-  out.innerHTML = '<div class="msg">Recherche…</div>';
+async function search(){
+  const q = $("q").value.trim().toLowerCase();
+  if (!q){ out.innerHTML = msg("Tape le nom d’un Pokémon."); return; }
+  const me = ++run;
+  out.innerHTML = msg("Recherche en cours…");
+  all = []; shown = STEP; status = "";
   try {
-    const url = `${API}?q=${encodeURIComponent('name:"' + q + '*"')}&pageSize=24&orderBy=-set.releaseDate&select=id,name,number,set,images,cardmarket`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(r.status);
-    results = (await r.json()).data.map(slim);
-    out.innerHTML = results.length ? results.map(c => row(c, false)).join("") : '<div class="msg">Aucune carte trouvée. Essaie le nom en anglais (ex : Charizard).</div>';
-  } catch(e) {
-    out.innerHTML = '<div class="msg">Impossible de joindre le service de prix. Vérifie ta connexion et réessaie.</div>';
+    // 1) liste des cartes (en français ET en anglais)
+    const enc = encodeURIComponent(q);
+    const res = await Promise.allSettled([getJSON(`${API}/fr/cards?name=${enc}`, 2, 25000), getJSON(`${API}/en/cards?name=${enc}`, 2, 25000)]);
+    if (res.every(r => r.status === "rejected")) throw res[0].reason;
+    const fr = res[0].status === "fulfilled" ? res[0].value : [];
+    const en = res[1].status === "fulfilled" ? res[1].value : [];
+    const frName = {};
+    fr.forEach(c => frName[c.id] = c.name);
+    const ids = [...new Set([...fr, ...en].map(c => c.id))].slice(0, 600);
+    if (!ids.length){ out.innerHTML = msg("Aucune carte trouvée. Essaie un autre nom."); return; }
+
+    // 2) prix de chaque carte, par petits paquets en parallèle
+    let done = 0, fail = 0;
+    const upd = () => { status = done < ids.length ? ` · prix ${done}/${ids.length}` : (fail ? ` · ${fail} sans réponse` : ""); };
+    await pool(ids, 8, async id => {
+      if (me !== run) return;
+      let c = pc.items[id];
+      if (!c){
+        try { c = slim(await detail(id), frName[id]); pc.items[id] = c; } catch(e){ fail++; }
+      }
+      if (c) all.push(Object.assign({}, c, frName[id] ? {name:frName[id]} : {}));
+      done++;
+      if (me === run && done % 40 === 0 && done < ids.length){ upd(); fillFilters(); view(); }
+    });
+    if (me !== run) return;
+    savePc();
+    upd(); fillFilters(); view();
+  } catch(e){
+    if (me === run) out.innerHTML = msg("Le service de prix ne répond pas (" + esc(e.message) + "). Réessaie dans un instant.");
   }
+}
+
+function fillFilters(){
+  const keepS = $("set").value, keepR = $("rar").value;
+  const sets = new Map();
+  all.forEach(c => sets.set(c.setId, c.set));
+  const sl = [...sets.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  $("set").innerHTML = '<option value="">Toutes les extensions</option>' + sl.map(([id, n]) => `<option value="${esc(id)}">${esc(n)}</option>`).join("");
+  const rl = [...new Set(all.map(c => c.rarity).filter(Boolean))].sort();
+  $("rar").innerHTML = '<option value="">Toutes les raretés</option>' + rl.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
+  $("set").value = keepS; $("rar").value = keepR;
+}
+
+function view(){
+  const y = window.scrollY;
+  const s = $("sort").value, hidePrice = $("priced").checked;
+  let l = all.filter(c => (!$("set").value || c.setId === $("set").value) && (!$("rar").value || c.rarity === $("rar").value));
+  const noPrice = l.filter(c => c.trend == null).length;
+  if (hidePrice) l = l.filter(c => c.trend != null);
+  l.sort((a, b) => {
+    if (s === "pd" || s === "pa"){
+      if (a.trend == null && b.trend == null) return 0;
+      if (a.trend == null) return 1;
+      if (b.trend == null) return -1;
+      return s === "pd" ? b.trend - a.trend : a.trend - b.trend;
+    }
+    return a.name.localeCompare(b.name) || String(a.number).localeCompare(String(b.number), undefined, {numeric:true});
+  });
+  if (!l.length){
+    out.innerHTML = `<div class="count">${esc(status)}</div>` + msg(all.length
+      ? "Aucune carte avec ces filtres." + (hidePrice && noPrice ? ` ${noPrice} carte${noPrice > 1 ? "s" : ""} sans prix masquée${noPrice > 1 ? "s" : ""} : ouvre « Filtres et tri » et décoche « Masquer les cartes sans prix ».` : "")
+      : "Chargement des cartes…");
+    return;
+  }
+  const note = hidePrice && noPrice ? ` (${noPrice} sans prix masquée${noPrice > 1 ? "s" : ""})` : "";
+  out.innerHTML = `<div class="count">${l.length} carte${l.length > 1 ? "s" : ""}${note}${esc(status)}</div>
+    <div id="list">${l.slice(0, shown).map(c => row(c, false)).join("")}</div>` +
+    (l.length > shown ? '<button id="more">Voir plus de cartes</button>' : "");
+  window.scrollTo(0, y);
+}
+
+function renderWatch(list){
+  out.innerHTML = list.length ? `<div id="list">${list.map(c => row(c, true)).join("")}</div>` : msg("Rien en suivi. Appuie sur « Suivre » depuis une recherche.");
 }
 
 async function showWatch(){
   const list = load();
-  if (!list.length){ out.innerHTML = '<div class="msg">Rien en suivi. Appuie sur « Suivre » depuis une recherche.</div>'; return; }
-  out.innerHTML = list.map(c => row(c, true)).join("");
-  // Rafraîchit les prix en direct
-  for (const c of list){
-    try {
-      const r = await fetch(`${API}/${c.id}?select=id,name,number,set,images,cardmarket`);
-      if (!r.ok) continue;
-      const fresh = slim((await r.json()).data);
-      Object.assign(c, fresh);
-    } catch(e){}
-  }
-  save(list);
-  if (tab === 2) out.innerHTML = list.map(c => row(c, true)).join("");
+  renderWatch(list);
+  if (!list.length) return;
+  const fresh = {};
+  await pool(list, 6, async c => {
+    try { fresh[c.id] = slim(await detail(c.id), c.name); } catch(e){}
+  });
+  const cur = load().map(c => fresh[c.id] ? Object.assign(c, fresh[c.id]) : c);
+  save(cur);
+  if (tab === 2) renderWatch(cur);
 }
 
 out.addEventListener("click", e => {
+  if (e.target.id === "more"){ shown += STEP; view(); return; }
   const b = e.target.closest("button[data-act]");
   if (!b) return;
   const id = b.dataset.id, act = b.dataset.act;
   let list = load();
   if (act === "del") list = list.filter(x => x.id !== id);
   else {
-    const src = list.find(x => x.id === id) || results.find(x => x.id === id);
+    const src = list.find(x => x.id === id) || all.find(x => x.id === id);
+    if (!src) return;
     const v = prompt("Prévenir quand le prix passe sous (en €) ?", src.target ?? "");
     if (v === null) return;
     const n = parseFloat(v.replace(",", "."));
@@ -136,24 +275,26 @@ out.addEventListener("click", e => {
     if (act === "add") list.push(src);
   }
   save(list);
-  if (tab === 2) showWatch(); else out.innerHTML = results.map(c => row(c, false)).join("");
+  if (tab === 2) renderWatch(list); else view();
 });
 
-document.getElementById("f").addEventListener("submit", e => {
+$("f").addEventListener("submit", e => {
   e.preventDefault();
-  const q = document.getElementById("q").value.trim();
-  if (!q) return;
   tab = 1; setTab();
   document.activeElement.blur();
-  search(q);
+  search();
 });
+["sort","set","rar","priced"].forEach(id => $(id).addEventListener("change", () => {
+  if (!all.length) return;
+  tab = 1; setTab(); shown = STEP; view();
+}));
 
 function setTab(){
-  document.getElementById("t1").classList.toggle("on", tab === 1);
-  document.getElementById("t2").classList.toggle("on", tab === 2);
+  $("t1").classList.toggle("on", tab === 1);
+  $("t2").classList.toggle("on", tab === 2);
 }
-document.getElementById("t1").onclick = () => { tab = 1; setTab(); out.innerHTML = results.length ? results.map(c => row(c, false)).join("") : '<div class="msg">Cherche une carte pour voir sa cote Cardmarket.</div>'; };
-document.getElementById("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
+$("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg("Tape le nom d’un Pokémon pour voir toutes ses cartes."); };
+$("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
 </script>
 </body>
 </html>
