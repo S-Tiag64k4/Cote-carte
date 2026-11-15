@@ -45,6 +45,24 @@ summary{font-weight:600;color:var(--blue)}
 .r a,.r button{font-size:13px;padding:7px 10px;border-radius:8px;text-decoration:none;background:transparent;color:var(--blue);border:1px solid var(--line);font-weight:600}
 .flag{display:inline-block;background:var(--alert);color:#fff;font-size:12px;font-weight:700;border-radius:6px;padding:2px 7px;margin-left:6px}
 #more{width:100%;padding:13px;margin-top:12px}
+.c{cursor:pointer}
+body.lock{overflow:hidden}
+.ov{position:fixed;inset:0;z-index:20;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
+.ovbar{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;background:var(--bg);border-bottom:1px solid var(--line);z-index:2}
+.ovbar b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:17px}
+.ovb{padding:14px 14px calc(70px + env(safe-area-inset-bottom,0px));display:grid;gap:14px}
+.hero{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
+.hero img{width:min(78vw,340px);border-radius:12px;display:block}
+.acts{justify-content:center}
+.sec{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.sec h3{margin:0 0 8px;font-size:15px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px 14px;font-size:15px}
+.kv span:nth-child(odd){color:var(--mute)}
+.kv span:nth-child(even){text-align:right;font-weight:600}
+.sub{font-weight:700;margin:10px 0 4px;font-size:14px}
+.atk{padding:8px 0;border-top:1px solid var(--line)}
+.atk:first-of-type{border-top:0;padding-top:0}
+.dmg{float:right;font-weight:700}
 </style>
 </head>
 <body>
@@ -79,8 +97,9 @@ summary{font-weight:600;color:var(--blue)}
       <label class="chk"><input type="checkbox" id="priced" checked> Masquer les cartes sans prix</label>
     </div>
   </details>
-  <div id="out"><div class="msg">Tape le nom d’un Pokémon pour voir toutes ses cartes.</div></div>
+  <div id="out"><div class="msg">Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée.</div></div>
 </main>
+<div id="ovl" class="ov" hidden></div>
 
 <script>
 // Données : TCGdex (gratuit, sans clé, noms en français). Prix : Cardmarket, en euros.
@@ -147,7 +166,7 @@ function row(c, followed){
   const price = c.trend == null
     ? '<div class="p none">Pas de prix</div>'
     : `<div class="p">${eur(c.trend)}</div><div class="d">le moins cher ${eur(c.low)} · moyenne 30 j ${eur(c.avg30)}</div>`;
-  return `<div class="c"><img src="${esc(c.img)}" alt="" loading="lazy">
+  return `<div class="c" data-id="${esc(c.id)}"><img src="${esc(c.img)}" alt="" loading="lazy">
     <div class="b"><h2>${esc(c.name)}${hit ? '<span class="flag">Sous ton seuil</span>' : ""}</h2>
       <div class="s">${esc(c.set)} · n° ${esc(c.number)}${c.rarity ? " · " + esc(c.rarity) : ""}</div>
       ${price}
@@ -258,24 +277,148 @@ async function showWatch(){
   if (tab === 2) renderWatch(cur);
 }
 
-out.addEventListener("click", e => {
-  if (e.target.id === "more"){ shown += STEP; view(); return; }
-  const b = e.target.closest("button[data-act]");
-  if (!b) return;
-  const id = b.dataset.id, act = b.dataset.act;
+function doAct(id, act){
   let list = load();
   if (act === "del") list = list.filter(x => x.id !== id);
   else {
-    const src = list.find(x => x.id === id) || all.find(x => x.id === id);
+    const src = list.find(x => x.id === id) || all.find(x => x.id === id) || (cs && cs.base.id === id ? cs.base : null);
     if (!src) return;
     const v = prompt("Prévenir quand le prix passe sous (en €) ?", src.target ?? "");
     if (v === null) return;
     const n = parseFloat(v.replace(",", "."));
     src.target = isNaN(n) ? null : n;
-    if (act === "add") list.push(src);
+    if (act === "add" && !list.find(x => x.id === id)) list.push(src);
   }
   save(list);
-  if (tab === 2) renderWatch(list); else view();
+  if (tab === 2) renderWatch(list); else if (all.length) view();
+}
+
+out.addEventListener("click", e => {
+  if (e.target.id === "more"){ shown += STEP; view(); return; }
+  const b = e.target.closest("button[data-act]");
+  if (b){ doAct(b.dataset.id, b.dataset.act); return; }
+  const card = e.target.closest(".c");
+  if (card && !e.target.closest("a")) openCard(card.dataset.id);
+});
+
+// ===== Fiche détaillée d’une carte =====
+const dc = {};
+let cs = null; // carte ouverte : {base, fr, en, loading}
+const dateFr = iso => { const d = new Date(iso); return isNaN(d) ? null : d.toLocaleDateString("fr-FR"); };
+const usd = n => (typeof n === "number" && n > 0) ? n.toLocaleString("fr-FR", {style:"currency", currency:"USD"}) : null;
+const e2 = n => (typeof n === "number" && n > 0) ? eur(n) : null;
+const kv = (k, v) => (v == null || v === "" || (Array.isArray(v) && !v.length)) ? "" : `<span>${esc(k)}</span><span>${esc(Array.isArray(v) ? v.join(", ") : v)}</span>`;
+const grid = rows => { const h = rows.join(""); return h ? `<div class="kv">${h}</div>` : ""; };
+const sec = (title, inner) => inner ? `<div class="sec"><h3>${esc(title)}</h3>${inner}</div>` : "";
+const VAR = {normal:"Normale", reverse:"Reverse", holo:"Holo", firstEdition:"1re édition", wPromo:"Promo W"};
+const PRINT = {normal:"Normale", holofoil:"Holo", "reverse-holofoil":"Reverse holo", "1st-edition":"1re édition", "1st-edition-holofoil":"1re édition holo", unlimited:"Illimitée", "unlimited-holofoil":"Illimitée holo"};
+const pctTxt = (a, b) => (a > 0 && b > 0) ? (((a / b - 1) * 100 > 0 ? "+" : "") + ((a / b - 1) * 100).toFixed(1).replace(".", ",") + " %") : null;
+
+async function openCard(id){
+  const base = all.find(x => x.id === id) || load().find(x => x.id === id);
+  if (!base) return;
+  cs = {base, fr:null, en:null, loading:true};
+  $("ovl").hidden = false;
+  document.body.classList.add("lock");
+  $("ovl").scrollTop = 0;
+  renderOv();
+  let d = dc[id];
+  if (!d){
+    const res = await Promise.allSettled([getJSON(`${API}/fr/cards/${encodeURIComponent(id)}`, 2, 20000), getJSON(`${API}/en/cards/${encodeURIComponent(id)}`, 2, 20000)]);
+    d = {fr: res[0].status === "fulfilled" ? res[0].value : null, en: res[1].status === "fulfilled" ? res[1].value : null};
+    if (d.fr || d.en) dc[id] = d;
+  }
+  if (!cs || cs.base.id !== id) return;
+  cs.fr = d.fr; cs.en = d.en; cs.loading = false;
+  renderOv();
+}
+
+function closeOv(){
+  $("ovl").hidden = true;
+  $("ovl").innerHTML = "";
+  document.body.classList.remove("lock");
+  cs = null;
+}
+
+function renderOv(){
+  if (!cs) return;
+  const b = cs.base, t = cs.fr || cs.en || {}, p = cs.en || cs.fr || {};
+  const w = load().find(x => x.id === b.id);
+  const set = t.set || {};
+  const cc = set.cardCount || {};
+  const num = (t.localId || b.number) + (cc.official ? "/" + cc.official : "");
+  const rar = t.rarity || b.rarity;
+  const img = t.image ? t.image + "/high.webp" : b.img;
+  const cm = (p.pricing && p.pricing.cardmarket) || {};
+  const tp = (p.pricing && p.pricing.tcgplayer) || {};
+
+  let h = `<div class="hero">${img ? `<a href="${esc(img)}" target="_blank" rel="noopener"><img src="${esc(img)}" alt="${esc(b.name)}"></a>` : ""}
+    <div class="p${b.trend == null ? " none" : ""}">${b.trend == null ? "Pas de prix" : eur(b.trend)}</div>
+    <div class="d">${esc(set.name || b.set)} · n° ${esc(num)}${rar ? " · " + esc(rar) : ""}</div></div>
+    <div class="r acts">${links(b)}
+      <a href="https://www.cardmarket.com/fr/Pokemon/Products/Search?searchString=${encodeURIComponent(b.name)}" target="_blank" rel="noopener">Cardmarket</a>
+      <button data-id="${esc(b.id)}" data-act="${w ? "set" : "add"}">${w ? "Changer le seuil" : "Suivre"}</button>
+      ${w ? `<button data-id="${esc(b.id)}" data-act="del">Retirer</button>` : ""}</div>`;
+
+  if (cs.loading) h += msg("Chargement des détails…");
+  else if (!cs.fr && !cs.en) h += msg("Détails indisponibles pour le moment. Ferme la fiche et rouvre-la dans un instant.");
+  else {
+    // Prix Cardmarket (EUR)
+    const cmRows = [kv("Tendance", e2(cm.trend)), kv("Moyenne", e2(cm.avg)), kv("Le moins cher", e2(cm.low)),
+      kv("Moyenne sur 1 jour", e2(cm.avg1)), kv("Moyenne sur 7 jours", e2(cm.avg7)), kv("Moyenne sur 30 jours", e2(cm.avg30)),
+      kv("Tendance vs moyenne 30 jours", pctTxt(cm.trend, cm.avg30)),
+      kv("Tendance (holo)", e2(cm["trend-holo"])), kv("Moyenne (holo)", e2(cm["avg-holo"])), kv("Le moins cher (holo)", e2(cm["low-holo"])),
+      kv("Moyenne 7 jours (holo)", e2(cm["avg7-holo"])), kv("Moyenne 30 jours (holo)", e2(cm["avg30-holo"])),
+      kv("Mis à jour le", cm.updated ? dateFr(cm.updated) : null)];
+    h += sec("Prix Cardmarket (€)", grid(cmRows) || '<div class="d">Pas de prix Cardmarket pour cette carte.</div>');
+
+    // Prix TCGplayer (USD)
+    const tpHtml = Object.keys(tp).filter(k => tp[k] && typeof tp[k] === "object").map(k => {
+      const v = tp[k];
+      const g = grid([kv("Prix du marché", usd(v.marketPrice)), kv("Le plus bas", usd(v.lowPrice)), kv("Moyen", usd(v.midPrice)), kv("Le plus haut", usd(v.highPrice)), kv("Direct le plus bas", usd(v.directLowPrice))]);
+      return g ? `<div class="sub">${esc(PRINT[k] || k)}</div>${g}` : "";
+    }).join("");
+    if (tpHtml) h += sec("Prix TCGplayer ($)", tpHtml + (tp.updated && dateFr(tp.updated) ? `<div class="d" style="margin-top:8px">Mis à jour le ${esc(dateFr(tp.updated))}</div>` : ""));
+
+    // Informations générales
+    const lg = t.legal;
+    const variants = Object.keys(t.variants || {}).filter(k => t.variants[k] === true).map(k => VAR[k] || k);
+    h += sec("Informations", grid([
+      kv("Catégorie", t.category), kv("Type de dresseur", t.trainerType), kv("Type d’énergie", t.energyType),
+      kv("Stade", t.stage), kv("Évolue de", t.evolveFrom), kv("PV", t.hp), kv("Types", t.types),
+      kv("Niveau", t.level), kv("Suffixe", t.suffix), kv("Rareté", rar),
+      kv("Extension", set.name || b.set), kv("Numéro", num),
+      kv("Cartes dans l’extension", cc.official ? cc.official + (cc.total && cc.total !== cc.official ? " (" + cc.total + " avec les secrètes)" : "") : null),
+      kv("Illustrateur", t.illustrator), kv("Marque de régulation", t.regulationMark),
+      kv("Légale en Standard", lg ? (lg.standard ? "Oui" : "Non") : null), kv("Légale en Étendu", lg ? (lg.expanded ? "Oui" : "Non") : null),
+      kv("N° Pokédex", t.dexId), kv("Variantes", variants)]));
+
+    // Capacités et attaques
+    const ab = (t.abilities || []).map(a => `<div class="atk"><b>${a.type ? esc(a.type) + " : " : ""}${esc(a.name)}</b><div class="d">${esc(a.effect)}</div></div>`).join("");
+    const at = (t.attacks || []).map(a => `<div class="atk"><b>${esc(a.name)}</b>${a.damage != null && a.damage !== "" ? `<span class="dmg">${esc(a.damage)}</span>` : ""}
+      ${a.cost && a.cost.length ? `<div class="d">Coût : ${esc(a.cost.join(" · "))}</div>` : ""}${a.effect ? `<div class="d">${esc(a.effect)}</div>` : ""}</div>`).join("");
+    h += sec("Capacités", ab) + sec("Attaques", at);
+
+    // Combat
+    const wk = (t.weaknesses || []).map(x => x.type + (x.value ? " " + x.value : ""));
+    const rs = (t.resistances || []).map(x => x.type + (x.value ? " " + x.value : ""));
+    h += sec("Combat", grid([kv("Faiblesse", wk), kv("Résistance", rs), kv("Retraite", t.retreat)]));
+
+    // Textes
+    const eff = (t.item && t.item.effect) ? `<div class="atk"><b>${esc(t.item.name || "Objet")}</b><div class="d">${esc(t.item.effect)}</div></div>` : "";
+    h += sec("Effet", (t.effect ? `<div class="d">${esc(t.effect)}</div>` : "") + eff);
+    h += sec("Description", t.description ? `<div class="d">${esc(t.description)}</div>` : "");
+  }
+
+  const y = $("ovl").scrollTop;
+  $("ovl").innerHTML = `<div class="ovbar"><b>${esc(b.name)}</b><button type="button" data-close="1">Fermer</button></div><div class="ovb">${h}</div>`;
+  $("ovl").scrollTop = y;
+}
+
+$("ovl").addEventListener("click", e => {
+  if (e.target.closest("[data-close]")){ closeOv(); return; }
+  const b = e.target.closest("button[data-act]");
+  if (b){ doAct(b.dataset.id, b.dataset.act); renderOv(); }
 });
 
 $("f").addEventListener("submit", e => {
@@ -293,7 +436,7 @@ function setTab(){
   $("t1").classList.toggle("on", tab === 1);
   $("t2").classList.toggle("on", tab === 2);
 }
-$("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg("Tape le nom d’un Pokémon pour voir toutes ses cartes."); };
+$("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg("Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée."); };
 $("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
 </script>
 </body>
