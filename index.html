@@ -4,25 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Cote Cartes">
 <meta name="theme-color" content="#16213e">
 <title>Cote Cartes</title>
 <style>
-:root{--bg:#eef1f7;--card:#fff;--ink:#16213e;--mute:#667089;--line:#dde2ee;--blue:#2b59ff;--green:#16845a;--alert:#c2410c}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1526;--card:#18213a;--ink:#eef1f7;--mute:#98a2bd;--line:#2a3555;--blue:#7b9bff;--green:#47c995;--alert:#ff9461}}
+:root{--bg:#eef1f7;--card:#fff;--ink:#16213e;--mute:#667089;--line:#dde2ee;--blue:#2b59ff;--green:#16845a;--alert:#c2410c;--on:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1526;--card:#18213a;--ink:#eef1f7;--mute:#98a2bd;--line:#2a3555;--blue:#7b9bff;--green:#47c995;--alert:#ff9461;--on:#0f1526}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,system-ui,"Segoe UI",sans-serif}
-body{padding:env(safe-area-inset-top,0) 0 0}
-header{position:sticky;top:0;background:var(--bg);padding:12px 14px 8px;z-index:5;border-bottom:1px solid var(--line)}
+
+header{position:sticky;top:0;background:var(--bg);padding:calc(12px + env(safe-area-inset-top,0px)) 14px 8px;z-index:5;border-bottom:1px solid var(--line)}
 h1{font-size:22px;margin:0;letter-spacing:-.3px}
 .top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
 button.ghost{background:transparent;color:var(--blue);border:1px solid var(--line);padding:7px 12px;font-size:14px}
 form{display:flex;gap:8px}
 input,select{font:inherit;min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
 #q{flex:1}
-button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--blue);color:#fff;font-weight:600}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--blue);color:var(--on);font-weight:600}
 nav{display:flex;gap:6px;margin-top:10px}
-nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line);padding:10px 4px;font-size:15px}
+nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line);padding:10px 2px;font-size:13px}
 nav button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 main{padding:12px 14px calc(110px + env(safe-area-inset-bottom,0px));display:grid;gap:12px}
 details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
@@ -100,6 +101,7 @@ body.lock{overflow:hidden}
     <button id="t1" class="on" type="button">Recherche</button>
     <button id="t2" type="button">À surveiller</button>
     <button id="t3" type="button">Mes cartes</button>
+    <button id="t4" type="button">Scellés</button>
   </nav>
 </header>
 <main>
@@ -154,7 +156,7 @@ const API = "https://api.tcgdex.net/v2";
 const STEP = 30;
 const $ = id => document.getElementById(id);
 const out = $("out");
-let tab = 1, all = [], shown = STEP, status = "", run = 0;
+let tab = 1, all = [], shown = STEP, stat = "", run = 0, lastMsg = "";
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const eur = n => n == null ? "—" : n.toLocaleString("fr-FR", {style:"currency", currency:"EUR"});
@@ -237,7 +239,7 @@ function chart(pts, w, h){
 const cmPts = c => [{y:c.avg30, l:"30 j"}, {y:c.avg7, l:"7 j"}, {y:c.avg1, l:"1 j"}, {y:c.trend, l:"Auj."}].filter(q => q.y > 0).map((q, i) => Object.assign(q, {x:i}));
 
 // Deuxième copie des données dans IndexedDB (sécurité si localStorage est vidé)
-const idb = new Promise(res => { try { const r = indexedDB.open("cote", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch(e){ res(null); } });
+const idb = new Promise(res => { setTimeout(() => res(null), 4000); try { const r = indexedDB.open("cote", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch(e){ res(null); } });
 async function idbSet(k, v){ const db = await idb; if (!db) return; try { db.transaction("kv", "readwrite").objectStore("kv").put(v, k); } catch(e){} }
 async function idbGet(k){
   const db = await idb; if (!db) return null;
@@ -245,13 +247,15 @@ async function idbGet(k){
 }
 function load(){ try { return JSON.parse(localStorage.getItem("suivi") || "[]"); } catch(e){ return []; } }
 function save(l){ const j = JSON.stringify(l); try { localStorage.setItem("suivi", j); } catch(e){} idbSet("suivi", j); }
-function loadM(){ try { return JSON.parse(localStorage.getItem("mine") || "[]"); } catch(e){ return []; } }
+function loadM(){ try { return JSON.parse(localStorage.getItem("mine") || "[]").map(c => c.qty > 0 ? c : Object.assign({}, c, {qty:1})); } catch(e){ return []; } }
 function saveM(l){ const j = JSON.stringify(l); try { localStorage.setItem("mine", j); } catch(e){} idbSet("mine", j); }
 
 // Mémoire des prix : valable pour la journée (Cardmarket met à jour une fois par jour)
-const today = new Date().toISOString().slice(0, 10);
+const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+let today = ymd(new Date());
 let pc = {day:today, items:{}};
 try { const s = JSON.parse(localStorage.getItem("pxcache2") || "null"); if (s && s.day === today) pc = s; } catch(e){}
+document.addEventListener("visibilitychange", () => { if (document.hidden) return; const t = ymd(new Date()); if (t !== today){ today = t; pc = {day:today, items:{}}; mineAt = 0; } });
 function savePc(){ try { localStorage.setItem("pxcache2", JSON.stringify(pc)); } catch(e){ pc.items = {}; } }
 
 // Appel réseau simple, avec délai maximum et nouvel essai (sans AbortController)
@@ -260,10 +264,10 @@ async function getJSON(url, tries, ms){
   for (let i = 0; i < tries; i++){
     try {
       return await Promise.race([
-        fetch(url).then(r => { if (!r.ok) throw new Error("erreur " + r.status); return r.json(); }),
+        fetch(url).then(r => { if (!r.ok){ const er = new Error("erreur " + r.status); er.status = r.status; throw er; } return r.json(); }),
         new Promise((_, rej) => setTimeout(() => rej(new Error("trop lent")), ms))
       ]);
-    } catch(e){ last = e; }
+    } catch(e){ last = e; if (e.status >= 400 && e.status < 500) break; }
   }
   throw last;
 }
@@ -314,9 +318,10 @@ function soldLinks(c){
           <a href="https://www.pricecharting.com/search-products?q=${t}&type=prices" target="_blank" rel="noopener">PriceCharting</a>`;
 }
 
-function row(c, followed){
-  const w = load().find(x => x.id === c.id);
-  const own = loadM().find(x => x.id === c.id);
+function row(c, followed, W, M){
+  const w = (W || load()).find(x => x.id === c.id);
+  const own = (M || loadM()).find(x => x.id === c.id);
+  followed = followed || !!w;
   const hit = w && w.target != null && c.trend != null && c.trend <= w.target;
   const price = c.trend == null
     ? '<div class="p none">Pas de prix</div>'
@@ -338,12 +343,13 @@ async function pool(items, n, fn){
   await Promise.all(Array.from({length:n}, async () => { while (i < items.length){ const k = i++; await fn(items[k]); } }));
 }
 
+function say(t){ lastMsg = t; if (tab === 1) out.innerHTML = msg(t); }
 async function search(){
   const q = $("q").value.trim().toLowerCase();
-  if (!q){ out.innerHTML = msg("Tape le nom d’un Pokémon."); return; }
+  if (!q){ say("Tape le nom d’un Pokémon."); return; }
   const me = ++run;
-  out.innerHTML = msg("Recherche en cours…");
-  all = []; shown = STEP; status = "";
+  say("Recherche en cours…");
+  all = []; shown = STEP; stat = ""; $("set").value = ""; $("rar").value = "";
   try {
     // 1) liste des cartes (en français ET en anglais)
     const enc = encodeURIComponent(q);
@@ -356,11 +362,11 @@ async function search(){
     const imgOf = {};
     [...fr, ...en].forEach(c => { if (c.image && !imgOf[c.id]) imgOf[c.id] = c.image; });
     const ids = [...new Set([...fr, ...en].map(c => c.id))].slice(0, 600);
-    if (!ids.length){ out.innerHTML = msg("Aucune carte trouvée. Essaie un autre nom."); return; }
+    if (!ids.length){ say("Aucune carte trouvée. Essaie un autre nom."); return; }
 
     // 2) prix de chaque carte, par petits paquets en parallèle
     let done = 0, fail = 0;
-    const upd = () => { status = done < ids.length ? ` · prix ${done}/${ids.length}` : (fail ? ` · ${fail} sans réponse` : ""); };
+    const upd = () => { stat = done < ids.length ? ` · prix ${done}/${ids.length}` : (fail ? ` · ${fail} sans réponse` : ""); };
     await pool(ids, 8, async id => {
       if (me !== run) return;
       let c = pc.items[id];
@@ -369,13 +375,13 @@ async function search(){
       }
       if (c) all.push(Object.assign({}, c, frName[id] ? {name:frName[id]} : {}));
       done++;
-      if (me === run && done % 40 === 0 && done < ids.length){ upd(); fillFilters(); view(); }
+      if (done % 40 === 0 && done < ids.length){ savePc(); if (me === run){ upd(); fillFilters(); view(); } }
     });
     if (me !== run) return;
     savePc();
     upd(); fillFilters(); view();
   } catch(e){
-    if (me === run) out.innerHTML = msg("Le service de prix ne répond pas (" + esc(e.message) + "). Réessaie dans un instant.");
+    if (me === run) say("Le service de prix ne répond pas (" + esc(e.message) + "). Réessaie dans un instant.");
   }
 }
 
@@ -391,6 +397,7 @@ function fillFilters(){
 }
 
 function view(){
+  if (tab !== 1) return;
   const y = window.scrollY;
   const s = $("sort").value, hidePrice = $("priced").checked;
   let l = all.filter(c => (!$("set").value || c.setId === $("set").value) && (!$("rar").value || c.rarity === $("rar").value));
@@ -406,14 +413,14 @@ function view(){
     return a.name.localeCompare(b.name) || String(a.number).localeCompare(String(b.number), undefined, {numeric:true});
   });
   if (!l.length){
-    out.innerHTML = `<div class="count">${esc(status)}</div>` + msg(all.length
+    out.innerHTML = `<div class="count">${esc(stat)}</div>` + msg(all.length
       ? "Aucune carte avec ces filtres." + (hidePrice && noPrice ? ` ${noPrice} carte${noPrice > 1 ? "s" : ""} sans prix masquée${noPrice > 1 ? "s" : ""} : ouvre « Filtres et tri » et décoche « Masquer les cartes sans prix ».` : "")
       : "Chargement des cartes…");
     return;
   }
   const note = hidePrice && noPrice ? ` (${noPrice} sans prix masquée${noPrice > 1 ? "s" : ""})` : "";
-  out.innerHTML = `<div class="count">${l.length} carte${l.length > 1 ? "s" : ""}${note}${esc(status)}</div>
-    <div id="list">${l.slice(0, shown).map(c => row(c, false)).join("")}</div>` +
+  out.innerHTML = `<div class="count">${l.length} carte${l.length > 1 ? "s" : ""}${note}${esc(stat)}</div>
+    <div id="list">${((W, M) => l.slice(0, shown).map(c => row(c, false, W, M)).join(""))(load(), loadM())}</div>` +
     (l.length > shown ? '<button id="more">Voir plus de cartes</button>' : "");
   window.scrollTo(0, y);
 }
@@ -567,9 +574,9 @@ pkShowState();
 
 let pkLast = 0;
 async function pkWait(){
-  const w = pkLast + 2000 - Date.now();
-  if (w > 0) await new Promise(r => setTimeout(r, w));
-  pkLast = Date.now();
+  const now = Date.now(), at = Math.max(now, pkLast + 2000);
+  pkLast = at;
+  if (at > now) await new Promise(r => setTimeout(r, at - now));
 }
 function rlInfo(r){
   const o = [];
@@ -598,6 +605,7 @@ async function pkGet(path){
 function pkErr(e){
   const st = e.status, m = (e.message && e.message !== "timeout") ? " (" + String(e.message).slice(0, 140) + ")" : "";
   if (e.message === "timeout") return "PokeTrace met trop de temps à répondre. Réessaie dans un instant.";
+  if (!st) return "PokeTrace est injoignable depuis cet appareil." + m;
   if (st === 401) return "Clé refusée par PokeTrace. Vérifie-la dans « Réglages »." + m;
   if (st === 429) return "Limite de requêtes PokeTrace atteinte" + (/^\d+$/.test(e.retry) ? " : réessaie dans " + e.retry + " s." : ". Attends un moment puis réessaie : ta formule a peut-être une limite basse ou journalière.") + m + (e.rl ? " [" + e.rl + "]" : "");
   if (st === 402 || st === 403) return "Ta formule PokeTrace ne donne pas accès à cette donnée." + m;
@@ -703,7 +711,7 @@ async function loadSold(b, enName, cursor){
         const l = await pkGet(`/cards/${encodeURIComponent(card.id)}/listings?limit=10&sort=sold_at_desc`);
         const items = (l.data || []).filter(x => x.listingType === "sold");
         html += items.length
-          ? `<div class="sold" style="margin-top:10px">${items.map(x => `<a href="${esc(x.listingUrl)}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>${usd2(Number(x.price)) || ""}</b></a>`).join("")}</div>`
+          ? `<div class="sold" style="margin-top:10px">${items.map(x => `<a href="${esc(/^https?:\/\//.test(x.listingUrl) ? x.listingUrl : "#")}" target="_blank" rel="noopener"><span>${esc(x.title)}<br><span class="d">${x.soldAt ? dateFr(x.soldAt) : ""}</span></span><b>${usd2(Number(x.price)) || ""}</b></a>`).join("")}</div>`
           : '<div class="note">Aucune vente détaillée trouvée.</div>';
       } catch(e){
         if (e.status === 402 || e.status === 403){
@@ -770,7 +778,7 @@ function renderOv(){
   const cm = (p.pricing && p.pricing.cardmarket) || {};
   const tp = (p.pricing && p.pricing.tcgplayer) || {};
 
-  let h = `<div class="hero"><a href="${esc(hs[0] || "#")}" target="_blank" rel="noopener"><img src="${esc(hs[0] || phUri(b.name + "|" + b.number))}" data-alt="${esc(hs.slice(1).join("|"))}" data-n="${esc(b.name + "|" + b.number)}" alt="${esc(b.name)}"></a>
+  let h = `<div class="hero"><a ${hs[0] ? `href="${esc(hs[0])}" target="_blank" rel="noopener"` : ""}><img src="${esc(hs[0] || phUri(b.name + "|" + b.number))}" data-alt="${esc(hs.slice(1).join("|"))}" data-n="${esc(b.name + "|" + b.number)}" alt="${esc(b.name)}"></a>
     <div class="p${b.trend == null ? " none" : ""}">${b.trend == null ? "Pas de prix" : eur(b.trend)}</div>
     <div class="d">${esc(set.name || b.set)} · n° ${esc(num)}${rar ? " · " + esc(rar) : ""}</div></div>
     <div class="r acts">${links(b)}
@@ -939,6 +947,7 @@ $("setclose").addEventListener("click", () => { $("setov").hidden = true; docume
 
 $("f").addEventListener("submit", e => {
   e.preventDefault();
+  if (tab === 4){ document.activeElement.blur(); showSeal(); return; }
   tab = 1; setTab();
   document.activeElement.blur();
   search();
@@ -949,11 +958,53 @@ $("f").addEventListener("submit", e => {
 }));
 
 function setTab(){
-  [1, 2, 3].forEach(n => $("t" + n).classList.toggle("on", tab === n));
+  $("flt").hidden = tab !== 1;
+  [1, 2, 3, 4].forEach(n => $("t" + n).classList.toggle("on", tab === n));
 }
-$("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg("Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée."); };
+$("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg(lastMsg || "Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée."); };
 $("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
 $("t3").onclick = () => { tab = 3; setTab(); showMine(); };
+
+// ===== Scellés (ETB, displays…) : lit data/produits.json =====
+let seal = null, sealOnly = false;
+const SEAL_TAG = {en_stock:["En stock","k-sell"], rupture:["Rupture de stock","k-warn"], precommande:["Précommande","k-hold"], inconnu:["À confirmer",""]};
+async function showSeal(){
+  if (!seal){
+    out.innerHTML = msg("Chargement…");
+    try {
+      const r = await fetch("data/produits.json?t=" + Date.now(), {cache:"no-store"});
+      if (!r.ok) throw new Error("erreur " + r.status);
+      seal = await r.json();
+    } catch(e){ if (tab === 4) out.innerHTML = msg("Impossible de charger data/produits.json (" + esc(e.message) + ")."); return; }
+  }
+  renderSeal();
+}
+function renderSeal(){
+  if (tab !== 4 || !seal) return;
+  const nz = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const q = nz($("q").value).split(/\s+/).filter(Boolean);
+  const rk = o => o.stock === "en_stock" ? 0 : o.stock === "precommande" ? 1 : o.stock === "inconnu" ? 2 : 3;
+  const best = p => { const v = p.offres.filter(o => o.stock === "en_stock" && o.prix != null).map(o => o.prix); return v.length ? Math.min(...v) : Infinity; };
+  const l = (seal.produits || []).filter(p => {
+    if (sealOnly && !p.offres.some(o => o.stock === "en_stock")) return false;
+    const h = nz([p.nom, p.categorie].concat(p.alias || []).join(" "));
+    return q.every(t => h.includes(t));
+  }).sort((a, b) => best(a) - best(b) || a.nom.localeCompare(b.nom, "fr"));
+  const card = p => `<div class="sec"><h3>${esc(p.nom)}</h3><div class="d">${esc(p.categorie || "")}</div><div class="sold">${
+    p.offres.slice().sort((a, b) => rk(a) - rk(b) || (a.prix == null) - (b.prix == null) || a.prix - b.prix).map(o => {
+      const t = SEAL_TAG[o.stock] || SEAL_TAG.inconnu;
+      const href = /^https?:\/\//.test(o.url || "") ? ` href="${esc(o.url)}" target="_blank" rel="noopener"` : "";
+      return `<a${href}><span>${esc(o.boutique)} <span class="badge ${t[1]}">${t[0]}</span></span><b>${o.prix != null ? eur(o.prix) : "à confirmer"}</b></a>`;
+    }).join("")}</div></div>`;
+  const d = seal.updated ? new Date(seal.updated).toLocaleString("fr-FR", {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}) : "à confirmer";
+  out.innerHTML = `<div class="fl"><label class="chk"><input type="checkbox" id="sealstk"${sealOnly ? " checked" : ""}> En stock uniquement</label></div>
+    <div class="count" style="margin-top:10px">Mis à jour : ${esc(d)}</div>` +
+    (l.length ? `<div id="list">${l.map(card).join("")}</div>` : msg("Aucun produit trouvé."));
+}
+document.addEventListener("change", e => { if (e.target.id === "sealstk"){ sealOnly = e.target.checked; renderSeal(); } });
+$("t4").onclick = () => { tab = 4; setTab(); showSeal(); };
+
+document.addEventListener("keydown", e => { if (e.key !== "Escape") return; if (!$("setov").hidden) $("setclose").click(); else if (!$("ovl").hidden) closeOv(); });
 </script>
 </body>
 </html>
