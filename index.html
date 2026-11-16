@@ -23,7 +23,7 @@ input,select{font:inherit;min-width:0;padding:11px 12px;border:1px solid var(--l
 #q{flex:1}
 button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--blue);color:var(--on);font-weight:600}
 nav{display:flex;gap:6px;margin-top:10px}
-nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line);padding:10px 2px;font-size:13px}
+nav button{flex:1;background:transparent;color:var(--mute);border:1px solid var(--line);padding:10px 4px;font-size:15px}
 nav button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 main{padding:12px 14px calc(110px + env(safe-area-inset-bottom,0px));display:grid;gap:12px}
 details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
@@ -101,7 +101,6 @@ body.lock{overflow:hidden}
     <button id="t1" class="on" type="button">Recherche</button>
     <button id="t2" type="button">À surveiller</button>
     <button id="t3" type="button">Mes cartes</button>
-    <button id="t4" type="button">Scellés</button>
   </nav>
 </header>
 <main>
@@ -947,7 +946,6 @@ $("setclose").addEventListener("click", () => { $("setov").hidden = true; docume
 
 $("f").addEventListener("submit", e => {
   e.preventDefault();
-  if (tab === 4){ document.activeElement.blur(); showSeal(); return; }
   tab = 1; setTab();
   document.activeElement.blur();
   search();
@@ -959,51 +957,11 @@ $("f").addEventListener("submit", e => {
 
 function setTab(){
   $("flt").hidden = tab !== 1;
-  [1, 2, 3, 4].forEach(n => $("t" + n).classList.toggle("on", tab === n));
+  [1, 2, 3].forEach(n => $("t" + n).classList.toggle("on", tab === n));
 }
 $("t1").onclick = () => { tab = 1; setTab(); all.length ? view() : out.innerHTML = msg(lastMsg || "Tape le nom d’un Pokémon pour voir toutes ses cartes. Touche une carte pour ouvrir sa fiche détaillée."); };
 $("t2").onclick = () => { tab = 2; setTab(); showWatch(); };
 $("t3").onclick = () => { tab = 3; setTab(); showMine(); };
-
-// ===== Scellés (ETB, displays…) : lit data/produits.json =====
-let seal = null, sealOnly = false;
-const SEAL_TAG = {en_stock:["En stock","k-sell"], rupture:["Rupture de stock","k-warn"], precommande:["Précommande","k-hold"], inconnu:["À confirmer",""]};
-async function showSeal(){
-  if (!seal){
-    out.innerHTML = msg("Chargement…");
-    try {
-      const r = await fetch("data/produits.json?t=" + Date.now(), {cache:"no-store"});
-      if (!r.ok) throw new Error("erreur " + r.status);
-      seal = await r.json();
-    } catch(e){ if (tab === 4) out.innerHTML = msg("Impossible de charger data/produits.json (" + esc(e.message) + ")."); return; }
-  }
-  renderSeal();
-}
-function renderSeal(){
-  if (tab !== 4 || !seal) return;
-  const nz = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const q = nz($("q").value).split(/\s+/).filter(Boolean);
-  const rk = o => o.stock === "en_stock" ? 0 : o.stock === "precommande" ? 1 : o.stock === "inconnu" ? 2 : 3;
-  const best = p => { const v = p.offres.filter(o => o.stock === "en_stock" && o.prix != null).map(o => o.prix); return v.length ? Math.min(...v) : Infinity; };
-  const l = (seal.produits || []).filter(p => {
-    if (sealOnly && !p.offres.some(o => o.stock === "en_stock")) return false;
-    const h = nz([p.nom, p.categorie].concat(p.alias || []).join(" "));
-    return q.every(t => h.includes(t));
-  }).sort((a, b) => best(a) - best(b) || a.nom.localeCompare(b.nom, "fr"));
-  const card = p => `<div class="sec"><h3>${esc(p.nom)}</h3><div class="d">${esc(p.categorie || "")}</div><div class="sold">${
-    p.offres.slice().sort((a, b) => rk(a) - rk(b) || (a.prix == null) - (b.prix == null) || a.prix - b.prix).map(o => {
-      const t = SEAL_TAG[o.stock] || SEAL_TAG.inconnu;
-      const href = /^https?:\/\//.test(o.url || "") ? ` href="${esc(o.url)}" target="_blank" rel="noopener"` : "";
-      return `<a${href}><span>${esc(o.boutique)} <span class="badge ${t[1]}">${t[0]}</span></span><b>${o.prix != null ? eur(o.prix) : "à confirmer"}</b></a>`;
-    }).join("")}</div></div>`;
-  const d = seal.updated ? new Date(seal.updated).toLocaleString("fr-FR", {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}) : "à confirmer";
-  out.innerHTML = `<div class="fl"><label class="chk"><input type="checkbox" id="sealstk"${sealOnly ? " checked" : ""}> En stock uniquement</label></div>
-    <div class="count" style="margin-top:10px">Mis à jour : ${esc(d)}</div>` +
-    (l.length ? `<div id="list">${l.map(card).join("")}</div>` : msg("Aucun produit trouvé."));
-}
-document.addEventListener("change", e => { if (e.target.id === "sealstk"){ sealOnly = e.target.checked; renderSeal(); } });
-$("t4").onclick = () => { tab = 4; setTab(); showSeal(); };
-
 document.addEventListener("keydown", e => { if (e.key !== "Escape") return; if (!$("setov").hidden) $("setclose").click(); else if (!$("ovl").hidden) closeOv(); });
 </script>
 </body>
